@@ -198,7 +198,7 @@ public class MainActivity extends Activity {
         hexWrite.setOnClickListener(v -> writeHexEditorPage(false));
         hexRestore.setOnClickListener(v -> writeHexEditorPage(true));
 
-        section(page, "03C  POINTER SCANNER", "Build a bounded pointer map from writable, non-executable regions, then search multi-level chains back to module memory.");
+        section(page, "03C  POINTER SCANNER", "Build a bounded pointer map from readable regions (module regions prioritized), then search multi-level chains back to module memory.");
         pointerTarget=field("Target address", "0x0");
         pointerOffset=field("Maximum offset per level (hex or decimal)", "4096");
         pointerDepth=field("Maximum depth (1–5)", "3");
@@ -208,7 +208,7 @@ public class MainActivity extends Activity {
         Button pointerScan=button("BUILD MAP + FIND CHAINS",ACCENT), pointerCancelButton=button("CANCEL",PANEL);
         pointerActions.addView(pointerScan,new LinearLayout.LayoutParams(0,dp(48),1));
         pointerActions.addView(pointerCancelButton,new LinearLayout.LayoutParams(0,dp(48),1)); page.addView(pointerActions);
-        pointerResult=text("No pointer scan performed. Writable non-executable memory only; bounded by the MiB budget.",11,MUTED,false);
+        pointerResult=text("No pointer scan performed. Readable memory; module regions prioritized; bounded by the MiB budget.",11,MUTED,false);
         pointerResult.setTypeface(Typeface.MONOSPACE); page.addView(pointerResult);
         pointerScan.setOnClickListener(v->startPointerScan());
         pointerCancelButton.setOnClickListener(v->{pointerCancel=true;pointerResult.setText("Cancellation requested…");});
@@ -702,10 +702,20 @@ public class MainActivity extends Activity {
         runAsync("Building pointer map and searching chains",()->{
             int p=currentPid(); List<MapEntry> regions=client.maps(p), sources=new ArrayList<>();
             long remaining=(long)budget*1024*1024,scanned=0;
-            for(MapEntry m:regions)if((m.prot&3)==3&&(m.prot&4)==0&&m.end>m.start&&remaining>0){
-                long size=Math.min(m.end-m.start,remaining);MapEntry x=new MapEntry();x.name=m.name;x.start=m.start;x.end=m.start+size;x.prot=m.prot;sources.add(x);remaining-=size;
+            List<MapEntry> readable=new ArrayList<>();
+            for(MapEntry m:regions)if((m.prot&1)!=0&&m.end>m.start)readable.add(m);
+            Collections.sort(readable,(a,b)->{
+                int pa=isPointerModule(a)?0:((a.prot&2)!=0&&(a.prot&4)==0?1:2);
+                int pb=isPointerModule(b)?0:((b.prot&2)!=0&&(b.prot&4)==0?1:2);
+                return Integer.compare(pa,pb);
+            });
+            for(MapEntry m:readable){
+                if(remaining<=0)break;
+                long size=Math.min(m.end-m.start,remaining);
+                MapEntry x=new MapEntry();x.name=m.name;x.start=m.start;x.end=m.start+size;x.prot=m.prot;
+                sources.add(x);remaining-=size;
             }
-            if(sources.isEmpty())throw new IOException("No readable writable non-executable regions found.");
+            if(sources.isEmpty())throw new IOException("No readable process memory regions found.");
             Collections.sort(sources,(a,b)->Long.compareUnsigned(a.start,b.start));
             List<PointerNode> nodes=new ArrayList<>();
             for(MapEntry m:sources){
@@ -724,7 +734,7 @@ public class MainActivity extends Activity {
                 }
                 if(nodes.size()>=500000)break;
             }
-            if(nodes.isEmpty())return "Pointer map contains no pointers into scanned writable regions. Scanned "+(scanned/1048576)+" MiB.";
+            if(nodes.isEmpty())return "Pointer map contains no pointers into scanned readable regions. Scanned "+(scanned/1048576)+" MiB.";
             Collections.sort(nodes,(a,b)->Long.compareUnsigned(a.value,b.value));
             List<PointerPath> frontier=new ArrayList<>();frontier.add(new PointerPath(target,new ArrayList<>()));
             Set<Long> visited=new HashSet<>();visited.add(target);List<PointerHit> hits=new ArrayList<>();
@@ -739,7 +749,7 @@ public class MainActivity extends Activity {
                         MapEntry base=null;
                         for(MapEntry m:regions){
                             String nm=m.name==null?"":m.name.toLowerCase(Locale.US);
-                            boolean module=nm.equals("executable")||nm.matches(".*\\.(bin|elf|self|prx|sprx|so)$");
+                            boolean module=isPointerModule(m);
                             if(module&&Long.compareUnsigned(node.slot,m.start)>=0&&Long.compareUnsigned(node.slot,m.end)<0){base=m;break;}
                         }
                         if(base!=null){
@@ -758,6 +768,10 @@ public class MainActivity extends Activity {
             if(hits.size()>=500)out.append("\nDisplay cap reached (500 chains).");
             return out.toString();
         },value->{pointerResult.setText(value);log("Pointer scan completed.");});
+    }
+    private static boolean isPointerModule(MapEntry m){
+        String n=m.name==null?"":m.name.toLowerCase(Locale.US);
+        return n.equals("executable")||n.matches(".*\\.(bin|elf|self|prx|sprx|so)$");
     }
     private static boolean pointerInRanges(List<MapEntry> ranges,long value){
         int lo=0,hi=ranges.size();
