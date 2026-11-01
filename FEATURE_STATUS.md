@@ -1,6 +1,6 @@
 # Feature implementation status
 
-Last updated: 2026-11-02. Status is based on source code currently committed to `main`. "Implemented (not live-tested)" means a UI and protocol call exist; it does **not** mean verified against a physical PS5.
+Last updated: 2026-11-02. Updated with per-entry address-table write and read-back verification. Status is based on source code currently committed to `main`. "Implemented (not live-tested)" means a UI and protocol call exist; it does **not** mean verified against a physical PS5.
 
 Legend: **Implemented** = code path exists; **Partial** = limited subset only; **Pending** = not implemented; **Test pending** = code exists but CI/device validation is not complete.
 
@@ -15,7 +15,7 @@ Legend: **Implemented** = code path exists; **Partial** = limited subset only; *
 | Exact byte scan | Partial | Client-side exact pattern scan over a user range capped at 16 MiB | AOB wildcard support, filters, paging and cancellation |
 | Turbo value scanner | Partial (not live-tested) | Dedicated second connection, TurboScan capability probe, payload auth handshake, server-resident first scans (exact/bigger/smaller/between), next scans (exact/bigger/smaller/between/increased/decreased/changed/unchanged and by-value variants), and user-paged result retrieval for byte/integer/float/double types, out-of-band cancel command, and per-result hex editing/writing | Fuzzy scans, AOB/string scans, segmented multi-region scans, live result refresh, robust cancel-state recovery and real-console validation |
 | Value scanner | Pending | — | First/next scans for all value types and compare modes |
-| Address list / freeze table | Pending | Individual found-result hex edit/write action | Persistent address table, add/remove, typed editing, live refresh, freeze/unfreeze, copy as cheat |
+| Address list / freeze table | Partial (not live-tested) | Persistent address table, add/edit/remove, typed values, manual/automatic refresh, per-entry WRITE with read-back verification, freeze/unfreeze scheduler; TurboScan results can be saved to the table | Bulk freeze controls, copy as cheat, robust reconnect/foreground lifecycle handling and real-console validation |
 | Hex editor | Partial | Hex dump output in memory read panel | Interactive paged editor, typed cursor values, selection/copy, edit/revert, dump |
 | Process disassembly | Partial | Calls payload disassembly command and displays instruction address/length/kind/bytes | Mnemonic/operand decoding, navigation, AOB, make signature, xrefs UI polish |
 | Cross references | Partial | RIP-relative xref search in executable regions (first 1 MiB per region) | Full-range configurable scan, result navigation, xref types |
