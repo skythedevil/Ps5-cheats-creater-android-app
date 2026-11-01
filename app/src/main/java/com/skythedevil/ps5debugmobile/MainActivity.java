@@ -156,8 +156,9 @@ public class MainActivity extends Activity {
         section(page, "03B  ADDRESS LIST & FREEZE", "Save memory addresses, refresh values, edit bytes and freeze selected entries at one-second intervals.");
         addressEntryName=field("Entry name", "Money");
         addressEntryAddress=field("Address", "0x0");
-        addressEntryBytes=field("Value bytes (hex)", "00 00 00 00");
-        page.addView(addressEntryName); page.addView(addressEntryAddress); page.addView(addressEntryBytes);
+        addressEntryType=new Spinner(this); String[] addressTypes={"Hex bytes","Byte (unsigned)","Byte (signed)","2 bytes (unsigned)","2 bytes (signed)","4 bytes (unsigned)","4 bytes (signed)","8 bytes (unsigned)","8 bytes (signed)","Float","Double"}; addressEntryType.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,addressTypes));
+        addressEntryBytes=field("Value (hex bytes or typed number)", "00 00 00 00");
+        page.addView(addressEntryName); page.addView(addressEntryAddress); page.addView(addressEntryType); page.addView(addressEntryBytes);
         LinearLayout addressActions=new LinearLayout(this); addressActions.setOrientation(LinearLayout.HORIZONTAL);
         Button addAddress=button("ADD ADDRESS", ACCENT), refreshAddresses=button("REFRESH ALL", PANEL);
         addressActions.addView(addAddress,new LinearLayout.LayoutParams(0,-2,1)); addressActions.addView(refreshAddresses,new LinearLayout.LayoutParams(0,-2,1)); page.addView(addressActions);
@@ -528,8 +529,8 @@ public class MainActivity extends Activity {
 
 
     private static final class AddressEntry {
-        String name, address, bytes; boolean frozen;
-        AddressEntry(String n,String a,String b,boolean f){name=n;address=a;bytes=b;frozen=f;}
+        String name, address, bytes; int type; boolean frozen;
+        AddressEntry(String n,String a,String b,int t,boolean f){name=n;address=a;bytes=b;type=t;frozen=f;}
     }
     private void loadAddressEntries() {
         addressEntries.clear();
@@ -547,9 +548,9 @@ public class MainActivity extends Activity {
     }
     private void addAddressEntry() {
         try {
-            String n=addressEntryName.getText().toString().trim(),a=addressEntryAddress.getText().toString().trim(),b=toHex(parseHex(addressEntryBytes.getText().toString()));
-            if(a.isEmpty()||b.isEmpty())throw new IllegalArgumentException("Enter an address and at least one byte.");
-            addressEntries.add(new AddressEntry(n.isEmpty()?"Entry "+(addressEntries.size()+1):n,a,b,false));
+            String n=addressEntryName.getText().toString().trim(),a=addressEntryAddress.getText().toString().trim(),raw=addressEntryBytes.getText().toString().trim(); int t=addressEntryType.getSelectedItemPosition(); String b=toHex(encodeAddressValue(t,raw));
+            if(a.isEmpty()||b.isEmpty())throw new IllegalArgumentException("Enter an address and a value.");
+            addressEntries.add(new AddressEntry(n.isEmpty()?"Entry "+(addressEntries.size()+1):n,a,b,t,false));
             saveAddressEntries();renderAddressEntries();log("Address added: "+a);
         } catch(Exception e){toast(e.getMessage());}
     }
@@ -559,7 +560,7 @@ public class MainActivity extends Activity {
         for(int i=0;i<addressEntries.size();i++){
             final int index=i;AddressEntry e=addressEntries.get(i);
             LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(8),dp(6),dp(8),dp(6));card.setBackgroundTintList(android.content.res.ColorStateList.valueOf(PANEL));
-            TextView label=text(e.name+"  "+e.address+"\n"+e.bytes+(e.frozen?"  [FROZEN]":""),12,TEXT,true);label.setTypeface(Typeface.MONOSPACE);card.addView(label);
+            TextView label=text(e.name+"  "+e.address+"\n"+addressTypeName(e.type)+": "+decodeAddressValue(e.type,parseHex(e.bytes))+"  ["+e.bytes+"]"+(e.frozen?"  [FROZEN]":""),12,TEXT,true);label.setTypeface(Typeface.MONOSPACE);card.addView(label);
             LinearLayout actions=new LinearLayout(this);actions.setOrientation(LinearLayout.HORIZONTAL);
             Button read=button("READ",PANEL),edit=button("EDIT",PANEL),freeze=button(e.frozen?"UNFREEZE":"FREEZE",e.frozen?GREEN:PANEL),remove=button("REMOVE",PANEL);
             for(Button b:new Button[]{read,edit,freeze,remove})actions.addView(b,new LinearLayout.LayoutParams(0,-2,1));
