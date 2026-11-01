@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "dev/v1.5-parity-batch" ]
   workflow_dispatch:
 
 permissions:
