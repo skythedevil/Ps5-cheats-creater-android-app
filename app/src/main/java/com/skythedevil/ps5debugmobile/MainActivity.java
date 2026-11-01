@@ -706,6 +706,7 @@ public class MainActivity extends Activity {
                 long size=Math.min(m.end-m.start,remaining);MapEntry x=new MapEntry();x.name=m.name;x.start=m.start;x.end=m.start+size;x.prot=m.prot;sources.add(x);remaining-=size;
             }
             if(sources.isEmpty())throw new IOException("No readable writable non-executable regions found.");
+            Collections.sort(sources,(a,b)->Long.compareUnsigned(a.start,b.start));
             List<PointerNode> nodes=new ArrayList<>();
             for(MapEntry m:sources){
                 long cursor=m.start;
