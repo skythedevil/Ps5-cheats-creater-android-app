@@ -67,7 +67,7 @@ public class MainActivity extends Activity {
     private LinearLayout addressRows;
     private final List<AddressEntry> addressEntries = new ArrayList<>();
     private final Handler addressHandler = new Handler(Looper.getMainLooper());
-    private final Runnable addressFreezeTick = new Runnable() { @Override public void run() { refreshFrozenAddresses(); if (!addressEntries.isEmpty()) addressHandler.postDelayed(this, 1000); } };
+    private final Runnable addressFreezeTick = new Runnable() { @Override public void run() { if(hasFrozenAddresses()){ refreshFrozenAddresses(); addressHandler.postDelayed(this, 1000); } } };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -537,7 +537,7 @@ public class MainActivity extends Activity {
             for(int i=0;i<arr.length();i++){JSONObject o=arr.getJSONObject(i);addressEntries.add(new AddressEntry(o.optString("name","Entry"),o.optString("address","0x0"),o.optString("bytes","00"),o.optBoolean("frozen",false)));}
         } catch(Exception e){log("Saved address table could not be loaded: "+e.getMessage());}
         renderAddressEntries();
-        if(addressEntries.stream().anyMatch(e->e.frozen)) addressHandler.removeCallbacks(addressFreezeTick);
+        if(hasFrozenAddresses()){addressHandler.removeCallbacks(addressFreezeTick);addressHandler.post(addressFreezeTick);}
     }
     private void saveAddressEntries() {
         JSONArray arr=new JSONArray();
@@ -565,7 +565,7 @@ public class MainActivity extends Activity {
             card.addView(actions);addressRows.addView(card,new LinearLayout.LayoutParams(-1,-2));
             read.setOnClickListener(v->readAddressEntry(index));
             edit.setOnClickListener(v->editAddressEntry(index));
-            freeze.setOnClickListener(v->{addressEntries.get(index).frozen=!addressEntries.get(index).frozen;saveAddressEntries();renderAddressEntries();if(addressEntries.stream().anyMatch(x->x.frozen)){addressHandler.removeCallbacks(addressFreezeTick);addressHandler.post(addressFreezeTick);}else addressHandler.removeCallbacks(addressFreezeTick);});
+            freeze.setOnClickListener(v->{addressEntries.get(index).frozen=!addressEntries.get(index).frozen;saveAddressEntries();renderAddressEntries();if(hasFrozenAddresses()){addressHandler.removeCallbacks(addressFreezeTick);addressHandler.post(addressFreezeTick);}else addressHandler.removeCallbacks(addressFreezeTick);});
             remove.setOnClickListener(v->{addressEntries.remove(index);saveAddressEntries();renderAddressEntries();});
         }
     }
@@ -583,6 +583,7 @@ public class MainActivity extends Activity {
         if(!connected){toast("Connect to the PS5 first.");return;}
         runAsync("Refreshing address table",()->{for(AddressEntry e:addressEntries){long a=resolveAddress(e.address,currentPid());e.bytes=toHex(client.read(currentPid(),a,parseHex(e.bytes).length));}saveAddressEntries();return "Refreshed "+addressEntries.size()+" address entries.";},r->{renderAddressEntries();log(r);});
     }
+    private boolean hasFrozenAddresses(){for(AddressEntry e:addressEntries)if(e.frozen)return true;return false;}
     private void refreshFrozenAddresses() {
         if(!connected)return;
         List<AddressEntry> frozen=new ArrayList<>();for(AddressEntry e:addressEntries)if(e.frozen)frozen.add(e);
