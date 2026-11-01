@@ -685,7 +685,7 @@ public class MainActivity extends Activity {
 
 
     private static final class PointerNode { final long slot,value; PointerNode(long s,long v){slot=s;value=v;} }
-    private static final class PointerPath { final long address; final List<Long> offsets; PointerPath(long a,List<Long> o){address=a;offsets=o;} }
+    private static final class PointerPath { final long address; final List<Long> offsets; final Set<Long> visited; PointerPath(long a,List<Long> o,Set<Long> v){address=a;offsets=o;visited=v;} }
     private static final class PointerHit { final String module; final long baseOffset; final List<Long> offsets; PointerHit(String m,long b,List<Long> o){module=m;baseOffset=b;offsets=o;} }
     private void startPointerScan(){
         if(!connected){toast("Connect to the PS5 first.");return;}
@@ -736,16 +736,17 @@ public class MainActivity extends Activity {
             }
             if(nodes.isEmpty())return "Pointer map contains no pointers into scanned readable regions. Scanned "+(scanned/1048576)+" MiB.";
             Collections.sort(nodes,(a,b)->Long.compareUnsigned(a.value,b.value));
-            List<PointerPath> frontier=new ArrayList<>();frontier.add(new PointerPath(target,new ArrayList<>()));
-            Set<Long> visited=new HashSet<>();visited.add(target);List<PointerHit> hits=new ArrayList<>();
+            List<PointerPath> frontier=new ArrayList<>();Set<Long> rootVisited=new HashSet<>();rootVisited.add(target);frontier.add(new PointerPath(target,new ArrayList<>(),rootVisited));
+            List<PointerHit> hits=new ArrayList<>();
             for(int level=1;level<=depth&&!frontier.isEmpty()&&hits.size()<500;level++){
                 List<PointerPath> next=new ArrayList<>();
                 for(PointerPath path:frontier){
                     if(pointerCancel)throw new IOException("Pointer scan cancelled.");
                     int lo=pointerLowerBound(nodes,path.address-maxOff),hi=pointerUpperBound(nodes,path.address);
                     for(int k=lo;k<hi;k++){
-                        PointerNode node=nodes.get(k);if(!visited.add(node.slot))continue;
+                        PointerNode node=nodes.get(k);if(path.visited.contains(node.slot))continue;
                         List<Long> offsets=new ArrayList<>(path.offsets);offsets.add(path.address-node.value);
+                        Set<Long> chainVisited=new HashSet<>(path.visited);chainVisited.add(node.slot);
                         MapEntry base=null;
                         for(MapEntry m:regions){
                             String nm=m.name==null?"":m.name.toLowerCase(Locale.US);
@@ -755,7 +756,7 @@ public class MainActivity extends Activity {
                         if(base!=null){
                             long moduleBase=base.start;for(MapEntry m:regions)if(base.name.equals(m.name)&&Long.compareUnsigned(m.start,moduleBase)<0)moduleBase=m.start;
                             Collections.reverse(offsets);hits.add(new PointerHit(base.name,node.slot-moduleBase,new ArrayList<>(offsets)));
-                        }else if(level<depth&&next.size()<100000)next.add(new PointerPath(node.slot,offsets));
+                        }else if(level<depth&&next.size()<100000)next.add(new PointerPath(node.slot,offsets,chainVisited));
                         if(hits.size()>=500)break;
                     }
                 }
