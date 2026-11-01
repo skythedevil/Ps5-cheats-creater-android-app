@@ -826,12 +826,12 @@ public class MainActivity extends Activity {
     }
     private void refreshTurboResult(PS5Client.TurboResult item,TextView label,Button button) {
         if(!connected||client==null){toast("Connect to the PS5 first.");return;}
-        button.setEnabled(false);
-        runAsync("Reading live scan value",()->client.read(currentPid(),item.address,item.current.length),bytes->{
-            item.current=bytes;
-            label.setText(String.format(Locale.US,"0x%016X\\nCurrent (live): %s\\nPrevious (scan): %s",item.address,toHex(item.current),toHex(item.previous)));
-            button.setEnabled(true);
-            log("Live value refreshed at 0x"+Long.toHexString(item.address).toUpperCase(Locale.US));
+        runAsync("Reading live scan value",()->toHex(client.read(currentPid(),item.address,item.current.length)),hex->{
+            try {
+                item.current=parseHex(hex);
+                label.setText(String.format(Locale.US,"0x%016X\\nCurrent (live): %s\\nPrevious (scan): %s",item.address,toHex(item.current),toHex(item.previous)));
+                log("Live value refreshed at 0x"+Long.toHexString(item.address).toUpperCase(Locale.US));
+            } catch(Exception e) { toast("Could not display refreshed value: "+e.getMessage()); }
         });
     }
     private void saveTurboResultToAddressTable(PS5Client.TurboResult item) {
