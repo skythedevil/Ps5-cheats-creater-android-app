@@ -1,6 +1,6 @@
 # Feature implementation status
 
-Last updated: 2026-11-02. Call Stack Viewer and read-only Code Cave Finder are committed and CI-built (physical-console validation pending). Bulk address-table freeze/unfreeze controls and guarded freeze scheduling are CI-built; paged hex editor with verified writes and restore-original is added in this batch (CI pending). Updated with per-entry address-table write and read-back verification. Status is based on source code currently committed to `dev/v1.5-parity-batch`. "Implemented (not live-tested)" means a UI and protocol call exist; it does **not** mean verified against a physical PS5.
+| Pointer scanner | Partial (CI pending) | Bounded client-side pointer map over writable non-executable regions; 8-byte aligned candidates; configurable scan budget, maximum offset and depth; multi-level chains rooted in named modules; cancellation; candidate/result caps | Needs turbo-assisted map construction, BSS/module alias handling, map/result save-load, live-chain resolve/rescan and physical-console performance validation |
 
 Legend: **Implemented** = code path exists; **Partial** = limited subset only; **Pending** = not implemented; **Test pending** = code exists but CI/device validation is not complete.
 
