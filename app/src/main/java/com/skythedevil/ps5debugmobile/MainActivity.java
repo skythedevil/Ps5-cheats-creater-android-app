@@ -45,6 +45,13 @@ public class MainActivity extends Activity {
 
     private EditText host, port, pid, readAddress, readLength, writeAddress, writeBytes;
     private EditText scanAddress, scanLength, scanBytes;
+    private EditText turboValue;
+    private Spinner turboType;
+    private TextView turboResult;
+    private PS5Client scanClient;
+    private boolean turboActive = false;
+    private int turboValueType = 4;
+    private int turboValueLength = 4;
     private EditText gameName, titleId, gameVersion, cheatName, cheatAddress, cheatBytes;
     private TextView connectionStatus, processInfo, memoryResult, scanResult, cheatStatus, mapResult, debugResult, disasmResult;
     private EditText mapFilter, disasmAddress, disasmLength, xrefTarget, breakpointIndex, breakpointAddress, watchIndex, watchAddress, threadId;
@@ -146,6 +153,25 @@ public class MainActivity extends Activity {
         scanResult.setTypeface(Typeface.MONOSPACE);
         page.addView(scanResult);
         scan.setOnClickListener(v -> scanRange());
+
+        section(page, "04B  TURBO VALUE SCANNER", "Uses the payload's server-side TurboScan engine on a separate connection. Start with an exact value, refine with Next Scan, then view results.");
+        turboType = new Spinner(this);
+        String[] turboTypes = {"Byte (unsigned)", "Byte (signed)", "2 bytes (unsigned)", "2 bytes (signed)", "4 bytes (unsigned)", "4 bytes (signed)", "8 bytes (unsigned)", "8 bytes (signed)", "Float", "Double"};
+        turboType.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, turboTypes));
+        turboType.setSelection(4);
+        page.addView(turboType);
+        turboValue = field("Exact value to find", "100"); page.addView(turboValue);
+        Button turboFirst = button("TURBO FIRST SCAN", ACCENT);
+        Button turboNext = button("NEXT SCAN (EXACT VALUE)", PANEL);
+        Button turboGet = button("LOAD FIRST 100 RESULTS", PANEL);
+        Button turboEnd = button("END SCAN SESSION", PANEL);
+        page.addView(turboFirst); page.addView(turboNext); page.addView(turboGet); page.addView(turboEnd);
+        turboResult = text("TurboScan not started. Requires payload TurboScan support.", 11, MUTED, false);
+        turboResult.setTypeface(Typeface.MONOSPACE); page.addView(turboResult);
+        turboFirst.setOnClickListener(v -> turboFirstScan());
+        turboNext.setOnClickListener(v -> turboNextScan());
+        turboGet.setOnClickListener(v -> turboLoadResults());
+        turboEnd.setOnClickListener(v -> turboEndScan());
 
         section(page, "05  MEMORY MAPS & CODE INSPECTION", "Inspect mapped modules/regions, decode x86-64 instruction boundaries using the payload, and search RIP-relative cross-references.");
         mapFilter = field("Optional module/name filter", "");
@@ -507,6 +533,61 @@ public class MainActivity extends Activity {
         }, value -> scanResult.setText(value));
     }
 
+    private byte[] encodeTurboValue(int type, String raw) {
+        ByteBuffer b;
+        switch(type) {
+            case 0: case 1: return new byte[]{(byte)Long.decode(raw).longValue()};
+            case 2: case 3: b=ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN); b.putShort((short)Long.decode(raw).longValue()); return b.array();
+            case 4: case 5: b=ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN); b.putInt((int)Long.decode(raw).longValue()); return b.array();
+            case 6: case 7: b=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN); b.putLong(Long.decode(raw)); return b.array();
+            case 8: b=ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN); b.putInt(Float.floatToIntBits(Float.parseFloat(raw))); return b.array();
+            case 9: b=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN); b.putLong(Double.doubleToLongBits(Double.parseDouble(raw))); return b.array();
+            default: throw new IllegalArgumentException("Unsupported value type.");
+        }
+    }
+    private void ensureTurboSession() throws Exception {
+        if(scanClient==null || !scanClient.isConnected()) {
+            scanClient=new PS5Client();
+            scanClient.connect(host.getText().toString().trim(),Integer.parseInt(port.getText().toString().trim()));
+        }
+        if(scanClient.turboCaps()==null) throw new IOException("Payload does not advertise TurboScan. Update ps5debug-NG or use Exact Byte Scan.");
+        scanClient.auth();
+    }
+    private void turboFirstScan() {
+        if(!connected) { toast("Connect to the PS5 first."); return; }
+        runAsync("Starting TurboScan",()->{
+            ensureTurboSession(); int p=currentPid();
+            long start=resolveAddress(scanAddress.getText().toString().trim(),p);
+            int length=Integer.decode(scanLength.getText().toString().trim());
+            if(length<1) throw new IllegalArgumentException("Enter a positive scan range.");
+            int type=turboType.getSelectedItemPosition(); byte[] value=encodeTurboValue(type,turboValue.getText().toString().trim());
+            long count=scanClient.turboFirstScan(p,start,length,type,value);
+            turboActive=true; turboValueType=type; turboValueLength=value.length;
+            return "TurboScan started. Results: "+count+"\\nRange: 0x"+Long.toHexString(start)+" – 0x"+Long.toHexString(start+(long)length);
+        },result->turboResult.setText(result));
+    }
+    private void turboNextScan() {
+        if(!connected || !turboActive || scanClient==null) { toast("Run Turbo First Scan first."); return; }
+        runAsync("Refining TurboScan",()->{
+            if(turboType.getSelectedItemPosition()!=turboValueType) throw new IllegalArgumentException("Value type cannot change during a scan.");
+            byte[] value=encodeTurboValue(turboValueType,turboValue.getText().toString().trim());
+            return "Next Scan complete. Remaining results: "+scanClient.turboNextExact(value);
+        },result->turboResult.setText(result));
+    }
+    private void turboLoadResults() {
+        if(!turboActive || scanClient==null) { toast("Run Turbo First Scan first."); return; }
+        runAsync("Loading TurboScan results",()->{
+            List<PS5Client.TurboResult> rows=scanClient.turboGet(0,100,turboValueLength);
+            StringBuilder b=new StringBuilder("First ").append(rows.size()).append(" result(s):\\n");
+            for(PS5Client.TurboResult r:rows) b.append(String.format(Locale.US,"0x%016X  current=%s  previous=%s\\n",r.address,toHex(r.current),toHex(r.previous)));
+            return b.toString();
+        },result->turboResult.setText(result));
+    }
+    private void turboEndScan() {
+        if(scanClient==null || !turboActive) { toast("No TurboScan session."); return; }
+        runAsync("Ending TurboScan",()->{scanClient.turboEnd();turboActive=false;return "TurboScan session ended.";},result->turboResult.setText(result));
+    }
+
     private void loadMaps() {
         if (!connected) { toast("Connect to the PS5 first."); return; }
         runAsync("Loading memory maps", () -> {
@@ -858,6 +939,9 @@ public class MainActivity extends Activity {
         private static final int MAGIC = (int)0xFFAABBCC;
         private static final int SUCCESS = (int)0x80000000;
         private static final int CMD_VERSION = (int)0xBD000001;
+        private static final int CMD_TURBO_CAPS = (int)0xBDAACC10, CMD_TURBO_START = (int)0xBDAACC11, CMD_TURBO_COUNT = (int)0xBDAACC12, CMD_TURBO_GET = (int)0xBDAACC13, CMD_TURBO_END = (int)0xBDAACC14, CMD_PROC_AUTH = (int)0xBDAACCFF;
+        private boolean authenticated=false;
+        private int activeTurboPid=0, activeTurboType=4;
         private static final int CMD_PROC_LIST = (int)0xBDAA0001;
         private static final int CMD_PROC_READ = (int)0xBDAA0002;
         private static final int CMD_PROC_WRITE = (int)0xBDAA0003;
@@ -893,8 +977,41 @@ public class MainActivity extends Activity {
 
         synchronized void close() {
             try { if (socket != null) socket.close(); } catch (Exception ignored) {}
-            socket = null; in = null; out = null;
+            socket = null; in = null; out = null; authenticated=false;
         }
+        synchronized boolean isConnected(){return socket!=null&&socket.isConnected()&&!socket.isClosed();}
+        static final class TurboCaps { int version,engines,threads; }
+        static final class TurboResult { long address; byte[] current,previous; }
+        synchronized TurboCaps turboCaps() throws IOException {
+            if(!isConnected()) throw new IOException("Not connected.");
+            socket.setSoTimeout(4000);
+            try { send(CMD_TURBO_CAPS,new byte[0]); int st=readIntLE(); if(st!=SUCCESS)return null; byte[] raw=readBytes(16); ByteBuffer b=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN); TurboCaps c=new TurboCaps(); c.version=b.getInt();c.engines=b.getInt();c.threads=b.getInt();b.getInt();return c; }
+            catch(java.net.SocketTimeoutException e){close();return null;}
+            finally{if(isConnected())socket.setSoTimeout(15000);}
+        }
+        private static byte[] authKey(){long mask=0xFFFFFFFFL,s1=200,s2=300,s3=400,s4=500;byte[] o=new byte[256];for(int i=0;i<256;i++){s1=((s1<<18)&0xFFF80000L)^(((s1^(s1<<6))&mask)>>>13);s2=((s2<<2)&0xFFFFFFE0L)^(((s2^(s2<<2))&mask)>>>27);s3=((s3<<7)&0xFFFFF800L)^(((s3^(s3<<13))&mask)>>>21);s4=((s4<<13)&0xFFF00000L)^(((s4^(s4<<3))&mask)>>>12);o[i]=(byte)(s1^s2^s3^s4);}return o;}
+        private int readUShortLE() throws IOException {byte[] b=readBytes(2);return(b[0]&255)|((b[1]&255)<<8);}
+        synchronized void auth() throws IOException {if(authenticated)return;ByteBuffer h=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(0xBB40E64D).putInt(2);send(CMD_PROC_AUTH,h.array());expectSuccess("TurboScan auth");int n=readUShortLE();if(n>4096)throw new IOException("Invalid auth challenge.");byte[] ch=readBytes(n),key=authKey();for(int i=0;i<n;i++)ch[i]=(byte)(ch[i]^key[i&255]);out.write(ch);out.flush();expectSuccess("TurboScan auth response");authenticated=true;}
+        synchronized long turboFirstScan(int pid,long start,int length,int type,byte[] value) throws IOException {
+            auth(); activeTurboPid=pid;activeTurboType=type;
+            ByteBuffer h=ByteBuffer.allocate(27).order(ByteOrder.LITTLE_ENDIAN);h.putInt(pid).putLong(start).putInt(length).put((byte)type).put((byte)0).put((byte)1).putInt(value.length).putInt(0x12);
+            send(CMD_TURBO_START,h.array());expectSuccess("TurboScan start");out.write(value);out.flush();expectSuccess("TurboScan setup");
+            ByteBuffer seg=ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(1).putLong(start).putInt(length);out.write(seg.array());out.flush();
+            byte[] raw=readBytes(12);ByteBuffer r=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);int stored=r.getInt();long count=r.getLong();
+            if(stored==0){if(readLongLE()!=-1L)throw new IOException("Unexpected TurboScan decline response.");expectSuccess("TurboScan decline");throw new IOException("Too many matches for the payload result list. Narrow the range.");}
+            expectSuccess("TurboScan completion");return count;
+        }
+        synchronized long turboNextExact(byte[] value) throws IOException {
+            auth();ByteBuffer h=ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);h.putInt(activeTurboPid).putLong(0L).put((byte)activeTurboType).put((byte)0).putInt(value.length).putInt(0x02);
+            send(CMD_TURBO_COUNT,h.array());expectSuccess("TurboScan next scan");out.write(value);out.flush();
+            while(readLongLE()!=-1L){} long count=readLongLE();expectSuccess("TurboScan next scan completion");return count;
+        }
+        synchronized List<TurboResult> turboGet(int start,int count,int valueLength) throws IOException {
+            ByteBuffer h=ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).putInt(start).putInt(count).putInt(0);send(CMD_TURBO_GET,h.array());expectSuccess("TurboScan get");
+            int hdr=readIntLE(),n=hdr&0x7FFFFFFF;boolean three=(hdr&0x80000000)!=0;if(n<0||n>10000)throw new IOException("Invalid result count.");int rec=8+valueLength*(three?3:2);byte[] raw=readBytes(n*rec);expectSuccess("TurboScan get completion");
+            List<TurboResult> rows=new ArrayList<>();for(int i=0;i<n;i++){int o=i*rec;TurboResult x=new TurboResult();x.address=ByteBuffer.wrap(raw,o,8).order(ByteOrder.LITTLE_ENDIAN).getLong();x.current=Arrays.copyOfRange(raw,o+8,o+8+valueLength);x.previous=Arrays.copyOfRange(raw,o+8+valueLength,o+8+2*valueLength);rows.add(x);}return rows;
+        }
+        synchronized void turboEnd() throws IOException {auth();send(CMD_TURBO_END,new byte[0]);expectSuccess("TurboScan end");activeTurboPid=0;} 
 
         private void ensureConnected() throws IOException {
             if (socket == null || socket.isClosed()) throw new IOException("Not connected to the PS5.");
