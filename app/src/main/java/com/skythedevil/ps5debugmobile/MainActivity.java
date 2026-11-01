@@ -216,8 +216,7 @@ public class MainActivity extends Activity {
     }
 
     private EditText addFieldLater(EditText e, LinearLayout.LayoutParams lp) {
-        // Fields are added by the caller so their ordering remains explicit.
-        e.setTag(lp);
+        e.setLayoutParams(lp);
         return e;
     }
 
