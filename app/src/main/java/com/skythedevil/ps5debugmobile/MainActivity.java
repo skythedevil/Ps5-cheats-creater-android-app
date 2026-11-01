@@ -1240,19 +1240,35 @@ public class MainActivity extends Activity {
             ByteBuffer h=ByteBuffer.allocate(27).order(ByteOrder.LITTLE_ENDIAN);h.putInt(pid).putLong(first.start).putInt(first.length).put((byte)type).put((byte)compare).put((byte)alignment).putInt(value.length).putInt(0x12);
             send(CMD_TURBO_START,h.array());expectSuccess("TurboScan start");out.write(value);out.flush();expectSuccess("TurboScan setup");out.write(blob);out.flush();
             byte[] raw=readBytes(12);ByteBuffer r=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);int stored=r.getInt();long count=r.getLong();
-            if(stored==0){if(readLongLE()!=-1L)throw new IOException("Unexpected TurboScan decline response.");expectSuccess("TurboScan decline");throw new IOException("Too many matches for the payload result list. Narrow the range.");}
+            if(stored==0){
+                if(readLongLE()!=-1L)throw new IOException("Unexpected TurboScan decline response.");
+                expectSuccess("TurboScan decline");
+                if(type>9)throw new IOException("Too many matches for this byte-pattern scan. Narrow the range or use a longer pattern.");
+                turboSnapshotFirstScan(pid,segments,type,alignment,!hasNonZero(value));
+                long narrowed=turboNextScan(compare,value,value.length==0?valueLengthForType(type):value.length);
+                socket.setSoTimeout(15000);
+                return narrowed;
+            }
             expectSuccess("TurboScan completion");socket.setSoTimeout(15000);return count;
         }
+        private int valueLengthForType(int type) throws IOException {
+            switch(type){case 0:case 1:return 1;case 2:case 3:return 2;case 4:case 5:case 8:return 4;case 6:case 7:case 9:return 8;default:throw new IOException("Unsupported TurboScan value type.");}
+        }
+        private boolean hasNonZero(byte[] value){if(value==null)return false;for(byte x:value)if(x!=0)return true;return false;}
         synchronized long turboUnknownFirstScan(int pid,List<TurboSegment> segments,int type,int alignment) throws IOException {
             if(type>9)throw new IOException("Unknown-value snapshots support numeric types only.");
-            auth();activeTurboPid=pid;activeTurboType=type;socket.setSoTimeout(120000);int flags=0x04|0x10|((turboEngines&0x40)!=0?0x20:0);TurboSegment first=segments.get(0);byte[] blob=turboSegmentsBlob(segments);
+            return turboSnapshotFirstScan(pid,segments,type,alignment,false);
+        }
+        private synchronized long turboSnapshotFirstScan(int pid,List<TurboSegment> segments,int type,int alignment,boolean includeZeros) throws IOException {
+            auth();activeTurboPid=pid;activeTurboType=type;socket.setSoTimeout(120000);int flags=0x04|0x10|(includeZeros?0x08:0)|((turboEngines&0x40)!=0?0x20:0);TurboSegment first=segments.get(0);byte[] blob=turboSegmentsBlob(segments);
             ByteBuffer h=ByteBuffer.allocate(27).order(ByteOrder.LITTLE_ENDIAN);h.putInt(pid).putLong(first.start).putInt(first.length).put((byte)type).put((byte)11).put((byte)alignment).putInt(0).putInt(flags);
             send(CMD_TURBO_START,h.array());expectSuccess("TurboScan snapshot start");expectSuccess("TurboScan snapshot setup");out.write(blob);out.flush();
-            long slots=readLongLE(),total=readLongLE();while(readLongLE()!=-1L){}int ok=readIntLE();long survivors=readLongLE();expectSuccess("TurboScan snapshot completion");socket.setSoTimeout(15000);
-            if(ok==0)throw new IOException("Console could not store the memory snapshot; choose a smaller range.");return survivors;
+            long slots=readLongLE(),total=readLongLE();while(readLongLE()!=-1L){}int ok=readIntLE();long survivors=readLongLE();expectSuccess("TurboScan snapshot completion");socket.setSoTimeout(120000);
+            if(ok==0)throw new IOException("Console could not store the memory snapshot; choose a smaller range or free snapshot storage.");
+            return survivors;
         }
         synchronized long turboNextScan(int compare,byte[] value,int valueLength) throws IOException {
-            auth();socket.setSoTimeout(120000);boolean needsValue=(compare==0||compare==2||compare==3||compare==4||compare==6||compare==8);
+            auth();socket.setSoTimeout(120000);boolean needsValue=(compare==0||compare==1||compare==2||compare==3||compare==4||compare==6||compare==8);
             int dataLength=needsValue&&value.length>0?value.length:valueLength;
             ByteBuffer h=ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);h.putInt(activeTurboPid).putLong(0L).put((byte)activeTurboType).put((byte)compare).putInt(dataLength).putInt(0x02);
             send(CMD_TURBO_COUNT,h.array());expectSuccess("TurboScan next scan");if(needsValue&&value.length>0){out.write(value);out.flush();}
