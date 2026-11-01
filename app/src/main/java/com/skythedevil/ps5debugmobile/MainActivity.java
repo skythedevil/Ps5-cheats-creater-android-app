@@ -66,6 +66,9 @@ public class MainActivity extends Activity {
     private EditText addressEntryName, addressEntryAddress, addressEntryBytes;
     private Spinner addressEntryType;
     private LinearLayout addressRows;
+    private boolean addressAutoRefresh=false, addressRefreshBusy=false;
+    private Button addressAutoButton;
+    private final Runnable addressRefreshTick=new Runnable(){@Override public void run(){if(addressAutoRefresh){refreshAddressEntriesQuietly();addressHandler.postDelayed(this,2000);}}};
     private final List<AddressEntry> addressEntries = new ArrayList<>();
     private final Handler addressHandler = new Handler(Looper.getMainLooper());
     private final Runnable addressFreezeTick = new Runnable() { @Override public void run() { if(hasFrozenAddresses()){ refreshFrozenAddresses(); addressHandler.postDelayed(this, 1000); } } };
@@ -160,11 +163,12 @@ public class MainActivity extends Activity {
         addressEntryBytes=field("Value (hex bytes or typed number)", "00 00 00 00");
         page.addView(addressEntryName); page.addView(addressEntryAddress); page.addView(addressEntryType); page.addView(addressEntryBytes);
         LinearLayout addressActions=new LinearLayout(this); addressActions.setOrientation(LinearLayout.HORIZONTAL);
-        Button addAddress=button("ADD ADDRESS", ACCENT), refreshAddresses=button("REFRESH ALL", PANEL);
-        addressActions.addView(addAddress,new LinearLayout.LayoutParams(0,-2,1)); addressActions.addView(refreshAddresses,new LinearLayout.LayoutParams(0,-2,1)); page.addView(addressActions);
+        Button addAddress=button("ADD ADDRESS", ACCENT), refreshAddresses=button("REFRESH ALL", PANEL); addressAutoButton=button("AUTO REFRESH: OFF", PANEL);
+        addressActions.addView(addAddress,new LinearLayout.LayoutParams(0,-2,1)); addressActions.addView(refreshAddresses,new LinearLayout.LayoutParams(0,-2,1)); page.addView(addressActions); page.addView(addressAutoButton);
         addressRows=new LinearLayout(this); addressRows.setOrientation(LinearLayout.VERTICAL); page.addView(addressRows);
         addAddress.setOnClickListener(v->addAddressEntry());
         refreshAddresses.setOnClickListener(v->refreshAddressEntries());
+        addressAutoButton.setOnClickListener(v->{addressAutoRefresh=!addressAutoRefresh;addressAutoButton.setText(addressAutoRefresh?"AUTO REFRESH: ON":"AUTO REFRESH: OFF");addressHandler.removeCallbacks(addressRefreshTick);if(addressAutoRefresh)addressHandler.post(addressRefreshTick);});
         loadAddressEntries();
 
         section(page, "04  EXACT BYTE SCAN", "Scans a chosen range for an exact byte pattern. Each scan is capped at 16 MiB to keep mobile memory and network use bounded.");
@@ -604,6 +608,11 @@ public class MainActivity extends Activity {
     private void refreshAddressEntries() {
         if(!connected){toast("Connect to the PS5 first.");return;}
         runAsync("Refreshing address table",()->{for(AddressEntry e:addressEntries){long a=resolveAddress(e.address,currentPid());e.bytes=toHex(client.read(currentPid(),a,parseHex(e.bytes).length));}saveAddressEntries();return "Refreshed "+addressEntries.size()+" address entries.";},r->{renderAddressEntries();log(r);});
+    }
+    private void refreshAddressEntriesQuietly(){
+        if(!connected||addressRefreshBusy||addressEntries.isEmpty())return;
+        addressRefreshBusy=true;
+        worker.execute(()->{try{for(AddressEntry e:addressEntries){long a=resolveAddress(e.address,currentPid());e.bytes=toHex(client.read(currentPid(),a,parseHex(e.bytes).length));}saveAddressEntries();main.post(()->{addressRefreshBusy=false;renderAddressEntries();});}catch(Exception ex){addressRefreshBusy=false;log("Auto-refresh stopped: "+ex.getMessage());addressAutoRefresh=false;main.post(()->{if(addressAutoButton!=null)addressAutoButton.setText("AUTO REFRESH: OFF");});}});
     }
     private boolean hasFrozenAddresses(){for(AddressEntry e:addressEntries)if(e.frozen)return true;return false;}
     private void refreshFrozenAddresses() {
