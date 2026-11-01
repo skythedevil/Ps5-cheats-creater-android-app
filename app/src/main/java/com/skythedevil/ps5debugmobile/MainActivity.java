@@ -583,12 +583,18 @@ public class MainActivity extends Activity {
             final int index=i;AddressEntry e=addressEntries.get(i);
             LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(8),dp(6),dp(8),dp(6));card.setBackgroundTintList(android.content.res.ColorStateList.valueOf(PANEL));
             TextView label=text(e.name+"  "+e.address+"\n"+addressTypeName(e.type)+": "+decodeAddressValue(e.type,parseHex(e.bytes))+"  ["+e.bytes+"]"+(e.frozen?"  [FROZEN]":""),12,TEXT,true);label.setTypeface(Typeface.MONOSPACE);card.addView(label);
-            LinearLayout actions=new LinearLayout(this);actions.setOrientation(LinearLayout.HORIZONTAL);
-            Button read=button("READ",PANEL),edit=button("EDIT",PANEL),freeze=button(e.frozen?"UNFREEZE":"FREEZE",e.frozen?GREEN:PANEL),remove=button("REMOVE",PANEL);
-            for(Button b:new Button[]{read,edit,freeze,remove})actions.addView(b,new LinearLayout.LayoutParams(0,-2,1));
-            card.addView(actions);addressRows.addView(card,new LinearLayout.LayoutParams(-1,-2));
+            LinearLayout actions=new LinearLayout(this);actions.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout firstRow=new LinearLayout(this);firstRow.setOrientation(LinearLayout.HORIZONTAL);
+            LinearLayout secondRow=new LinearLayout(this);secondRow.setOrientation(LinearLayout.HORIZONTAL);
+            Button read=button("READ",PANEL),edit=button("EDIT",PANEL),write=button("WRITE",ACCENT);
+            Button freeze=button(e.frozen?"UNFREEZE":"FREEZE",e.frozen?GREEN:PANEL),remove=button("REMOVE",PANEL);
+            for(Button b:new Button[]{read,edit,write})firstRow.addView(b,new LinearLayout.LayoutParams(0,dp(44),1));
+            for(Button b:new Button[]{freeze,remove})secondRow.addView(b,new LinearLayout.LayoutParams(0,dp(44),1));
+            actions.addView(firstRow);actions.addView(secondRow);card.addView(actions);
+            addressRows.addView(card,new LinearLayout.LayoutParams(-1,-2));
             read.setOnClickListener(v->readAddressEntry(index));
             edit.setOnClickListener(v->editAddressEntry(index));
+            write.setOnClickListener(v->writeAddressEntry(index));
             freeze.setOnClickListener(v->{addressEntries.get(index).frozen=!addressEntries.get(index).frozen;saveAddressEntries();renderAddressEntries();if(hasFrozenAddresses()){addressHandler.removeCallbacks(addressFreezeTick);addressHandler.post(addressFreezeTick);}else addressHandler.removeCallbacks(addressFreezeTick);});
             remove.setOnClickListener(v->{addressEntries.remove(index);saveAddressEntries();renderAddressEntries();});
         }
@@ -597,6 +603,23 @@ public class MainActivity extends Activity {
         if(!connected){toast("Connect to the PS5 first.");return;}
         AddressEntry e=addressEntries.get(index);
         runAsync("Reading address entry",()->{long a=resolveAddress(e.address,currentPid());byte[] data=client.read(currentPid(),a,parseHex(e.bytes).length);e.bytes=toHex(data);saveAddressEntries();return e.name+": "+e.bytes;},r->{renderAddressEntries();log(r);});
+    }
+    private void writeAddressEntry(int index) {
+        if(!connected || client==null){toast("Connect to the PS5 first.");return;}
+        if(index<0 || index>=addressEntries.size()){toast("Address entry no longer exists.");return;}
+        AddressEntry entry=addressEntries.get(index);
+        runAsync("Writing address entry",()->{
+            int p=currentPid();
+            long address=resolveAddress(entry.address,p);
+            byte[] value=parseHex(entry.bytes);
+            if(value.length==0 || value.length>4096)throw new IllegalArgumentException("Address value must contain 1–4096 bytes.");
+            client.write(p,address,value);
+            byte[] verify=client.read(p,address,value.length);
+            if(!Arrays.equals(value,verify))throw new IOException("Write sent, but read-back verification did not match.");
+            entry.bytes=toHex(verify);
+            saveAddressEntries();
+            return "Verified write: "+entry.name+" at 0x"+Long.toHexString(address).toUpperCase(Locale.US);
+        },result->{renderAddressEntries();log(result);toast("Memory value written and verified.");});
     }
     private void editAddressEntry(int index) {
         AddressEntry e=addressEntries.get(index);LinearLayout box=new LinearLayout(this);box.setPadding(dp(12),0,dp(12),0);box.setOrientation(LinearLayout.VERTICAL);
