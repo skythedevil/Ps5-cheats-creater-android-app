@@ -50,6 +50,8 @@ public class MainActivity extends Activity {
     private long turboResultTotal=0;
     private Spinner turboType;
     private Spinner turboCompare;
+    private EditText turboStartAddress, turboStopAddress, turboAlignment;
+    private CheckBox turboWritableOnly, turboIncludeExec, turboSkipSlow, turboFastAlignment;
     private TextView turboResult;
     private LinearLayout turboRows;
     private List<PS5Client.TurboResult> lastTurboResults = new ArrayList<>();
@@ -189,6 +191,13 @@ public class MainActivity extends Activity {
         turboType.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, turboTypes));
         turboType.setSelection(4);
         page.addView(turboType);
+        turboStartAddress=field("Memory start address (blank = all)", ""); turboStopAddress=field("Memory stop address (blank = all)", "");
+        page.addView(turboStartAddress); page.addView(turboStopAddress);
+        turboWritableOnly=new CheckBox(this); turboWritableOnly.setText("Writable regions only"); turboWritableOnly.setTextColor(TEXT); turboWritableOnly.setChecked(true); page.addView(turboWritableOnly);
+        turboIncludeExec=new CheckBox(this); turboIncludeExec.setText("Include executable/code regions"); turboIncludeExec.setTextColor(TEXT); page.addView(turboIncludeExec);
+        turboSkipSlow=new CheckBox(this); turboSkipSlow.setText("Skip slow / uncached regions (GPU)"); turboSkipSlow.setTextColor(TEXT); page.addView(turboSkipSlow);
+        turboFastAlignment=new CheckBox(this); turboFastAlignment.setText("Fast aligned scan"); turboFastAlignment.setTextColor(TEXT); turboFastAlignment.setChecked(true); page.addView(turboFastAlignment);
+        turboAlignment=field("Alignment (1, 2, 4, 8, 16)", "4"); page.addView(turboAlignment);
         turboCompare = new Spinner(this);
         String[] compareLabels = {"Exact value", "Fuzzy (±1)", "Bigger than", "Smaller than", "Between low/high", "Increased", "Increased by", "Decreased", "Decreased by", "Changed", "Unchanged", "Unknown initial value"};
         turboCompare.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, compareLabels));
@@ -699,12 +708,47 @@ public class MainActivity extends Activity {
             if(length<1) throw new IllegalArgumentException("Enter a positive scan range.");
             int type=turboType.getSelectedItemPosition(); int ci=turboCompare.getSelectedItemPosition();
             if(ci>4 && ci!=11) throw new IllegalArgumentException("First scan supports Exact, Fuzzy, Bigger, Smaller, Between or Unknown Initial Value.");
-             if(ci==1 && type!=8 && type!=9) throw new IllegalArgumentException("Fuzzy (±1) scan is supported only for Float and Double.");
+            if(ci==1 && type!=8 && type!=9) throw new IllegalArgumentException("Fuzzy (±1) scan is supported only for Float and Double.");
             int compare=TURBO_COMPARE_CODES[ci]; byte[] value=encodeTurboCompareValue(type,compare,turboValue.getText().toString().trim());
-            long count=compare==11?scanClient.turboUnknownFirstScan(p,start,length,type):scanClient.turboFirstScan(p,start,length,type,compare,value);
+            List<TurboSegment> segments=buildTurboSegments(p); if(segments.isEmpty()) throw new IllegalArgumentException("No readable memory regions match the selected filters.");
+            long count=compare==11?scanClient.turboUnknownFirstScan(p,segments,type,parseTurboAlignment()):scanClient.turboFirstScan(p,segments,type,compare,value,parseTurboAlignment());
             turboActive=true; turboValueType=type; turboValueLength=(type==4||type==5?4:type==6||type==7||type==9?8:type==8?4:type==2||type==3?2:1); turboResultTotal=count;
-            return "TurboScan started. Results: "+count+"\\nRange: 0x"+Long.toHexString(start)+" – 0x"+Long.toHexString(start+(long)length);
+            long totalBytes=0; for(TurboSegment seg:segments) totalBytes+=seg.length;
+            return "TurboScan started. Results: "+count+"\\nRegions: "+segments.size()+" | Selected memory: "+(totalBytes/1048576)+" MiB";
         },result->turboResult.setText(result));
+    }
+    private int parseTurboAlignment() {
+        int a=Integer.parseInt(turboAlignment.getText().toString().trim());
+        if(a<1||a>255) throw new IllegalArgumentException("Alignment must be between 1 and 255.");
+        return turboFastAlignment.isChecked()?a:1;
+    }
+    private List<TurboSegment> buildTurboSegments(int p) throws Exception {
+        long min=turboStartAddress.getText().toString().trim().isEmpty()?0L:resolveAddress(turboStartAddress.getText().toString().trim(),p);
+        long max=turboStopAddress.getText().toString().trim().isEmpty()?Long.MAX_VALUE:resolveAddress(turboStopAddress.getText().toString().trim(),p);
+        if(max<=min) throw new IllegalArgumentException("Stop address must be greater than start address.");
+        List<MapEntry> maps=scanClient.maps(p);
+        List<PS5Client.TurboRegion> classified=turboSkipSlow.isChecked()?scanClient.turboRegions(p):Collections.emptyList();
+        List<TurboSegment> out=new ArrayList<>();
+        for(MapEntry m:maps) {
+            if((m.prot&1)==0) continue;
+            if(turboWritableOnly.isChecked()&&(m.prot&2)==0) continue;
+            if(!turboIncludeExec.isChecked()&&(m.prot&4)!=0) continue;
+            long a=Math.max(m.start,min), b=Math.min(m.end,max); if(b<=a) continue;
+            if(turboSkipSlow.isChecked()) {
+                boolean slow=false, matched=false;
+                for(PS5Client.TurboRegion r:classified) if(r.end>a&&r.start<b) { matched=true; if((r.flags&1)!=0||r.mbps<100) slow=true; }
+                if(!matched||slow) continue;
+            }
+            while(b>a) { int n=(int)Math.min(b-a,0x40000000L); if(n>0)out.add(new TurboSegment(a,n)); a+=n; }
+        }
+        out.sort((x,y)->Long.compare(x.start,y.start));
+        List<TurboSegment> merged=new ArrayList<>();
+        for(TurboSegment x:out) {
+            if(!merged.isEmpty()) { TurboSegment last=merged.get(merged.size()-1);
+                if(last.start+(long)last.length==x.start && (long)last.length+x.length<=0x40000000L) { merged.set(merged.size()-1,new TurboSegment(last.start,last.length+x.length)); continue; } }
+            merged.add(x);
+        }
+        return merged;
     }
     private void turboNextScan() {
         if(!connected || !turboActive || scanClient==null) { toast("Run Turbo First Scan first."); return; }
@@ -1094,6 +1138,7 @@ public class MainActivity extends Activity {
         if (scanClient != null) scanClient.close();
     }
 
+    private static final class TurboSegment { final long start; final int length; TurboSegment(long s,int n){start=s;length=n;} }
     private static final class DisasmEntry {
         final long address; final int length, kind; final byte[] bytes;
         DisasmEntry(long a, int l, int k, byte[] b) { address=a; length=l; kind=k; bytes=b; }
@@ -1125,6 +1170,7 @@ public class MainActivity extends Activity {
         private static final int CMD_PROC_READ = (int)0xBDAA0002;
         private static final int CMD_PROC_WRITE = (int)0xBDAA0003;
         private static final int CMD_PROC_MAPS = (int)0xBDAA0004;
+        private static final int CMD_TURBO_REGIONS = (int)0xBDAACC16;
         private static final int CMD_PROC_INFO = (int)0xBDAA000A;
         private static final int CMD_PROC_DISASM_REGION = (int)0xBDAA0020;
         private static final int CMD_PROC_FIND_XREFS_TO = (int)0xBDAA0022;
@@ -1161,6 +1207,7 @@ public class MainActivity extends Activity {
         synchronized boolean isConnected(){return socket!=null&&socket.isConnected()&&!socket.isClosed();}
         static final class TurboCaps { int version,engines,threads; }
         static final class TurboResult { long address; byte[] current,previous; }
+        static final class TurboRegion { long start,end; int prot,flags,mbps; }
         synchronized TurboCaps turboCaps() throws IOException {
             if(!isConnected()) throw new IOException("Not connected.");
             socket.setSoTimeout(4000);
@@ -1170,27 +1217,32 @@ public class MainActivity extends Activity {
         }
         private static byte[] authKey(){long mask=0xFFFFFFFFL,s1=200,s2=300,s3=400,s4=500;byte[] o=new byte[256];for(int i=0;i<256;i++){s1=((s1<<18)&0xFFF80000L)^(((s1^(s1<<6))&mask)>>>13);s2=((s2<<2)&0xFFFFFFE0L)^(((s2^(s2<<2))&mask)>>>27);s3=((s3<<7)&0xFFFFF800L)^(((s3^(s3<<13))&mask)>>>21);s4=((s4<<13)&0xFFF00000L)^(((s4^(s4<<3))&mask)>>>12);o[i]=(byte)(s1^s2^s3^s4);}return o;}
         synchronized void auth() throws IOException {if(authenticated)return;ByteBuffer h=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(0xBB40E64D).putInt(2);send(CMD_PROC_AUTH,h.array());expectSuccess("TurboScan auth");int n=readUShortLE();if(n>4096)throw new IOException("Invalid auth challenge.");byte[] ch=readBytes(n),key=authKey();for(int i=0;i<n;i++)ch[i]=(byte)(ch[i]^key[i&255]);out.write(ch);out.flush();expectSuccess("TurboScan auth response");authenticated=true;}
-        synchronized long turboFirstScan(int pid,long start,int length,int type,int compare,byte[] value) throws IOException {
-            auth(); activeTurboPid=pid;activeTurboType=type; socket.setSoTimeout(120000);
-            ByteBuffer h=ByteBuffer.allocate(27).order(ByteOrder.LITTLE_ENDIAN);h.putInt(pid).putLong(start).putInt(length).put((byte)type).put((byte)compare).put((byte)1).putInt(value.length).putInt(0x12);
-            send(CMD_TURBO_START,h.array());expectSuccess("TurboScan start");out.write(value);out.flush();expectSuccess("TurboScan setup");
-            ByteBuffer seg=ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(1).putLong(start).putInt(length);out.write(seg.array());out.flush();
+        private byte[] turboSegmentsBlob(List<TurboSegment> segments) throws IOException {
+            if(segments==null||segments.isEmpty()||segments.size()>20000)throw new IOException("Invalid TurboScan region list.");
+            ByteBuffer b=ByteBuffer.allocate(4+segments.size()*12).order(ByteOrder.LITTLE_ENDIAN);b.putInt(segments.size());
+            for(TurboSegment x:segments){if(x.length<=0)throw new IOException("Invalid memory region length.");b.putLong(x.start).putInt(x.length);}return b.array();
+        }
+        synchronized List<TurboRegion> turboRegions(int pid) throws IOException {
+            auth();send(CMD_TURBO_REGIONS,ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(pid).putInt(0).putInt(0).putInt(0).array());
+            expectSuccess("TurboScan region classification");int n=readIntLE();if(n<0||n>20000)throw new IOException("Invalid TurboScan region count.");
+            byte[] raw=readBytes(n*32);expectSuccess("TurboScan region classification completion");List<TurboRegion> out=new ArrayList<>();ByteBuffer b=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+            for(int i=0;i<n;i++){TurboRegion r=new TurboRegion();r.start=b.getLong();r.end=b.getLong();r.prot=b.getInt();r.flags=b.getInt();r.mbps=b.getInt();b.getInt();out.add(r);}return out;
+        }
+        synchronized long turboFirstScan(int pid,List<TurboSegment> segments,int type,int compare,byte[] value,int alignment) throws IOException {
+            auth();activeTurboPid=pid;activeTurboType=type;socket.setSoTimeout(120000);TurboSegment first=segments.get(0);byte[] blob=turboSegmentsBlob(segments);
+            ByteBuffer h=ByteBuffer.allocate(27).order(ByteOrder.LITTLE_ENDIAN);h.putInt(pid).putLong(first.start).putInt(first.length).put((byte)type).put((byte)compare).put((byte)alignment).putInt(value.length).putInt(0x12);
+            send(CMD_TURBO_START,h.array());expectSuccess("TurboScan start");out.write(value);out.flush();expectSuccess("TurboScan setup");out.write(blob);out.flush();
             byte[] raw=readBytes(12);ByteBuffer r=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);int stored=r.getInt();long count=r.getLong();
             if(stored==0){if(readLongLE()!=-1L)throw new IOException("Unexpected TurboScan decline response.");expectSuccess("TurboScan decline");throw new IOException("Too many matches for the payload result list. Narrow the range.");}
             expectSuccess("TurboScan completion");socket.setSoTimeout(15000);return count;
         }
-        synchronized long turboUnknownFirstScan(int pid,long start,int length,int type) throws IOException {
-            if(type>9) throw new IOException("Unknown-value snapshots support numeric types only.");
-            auth();activeTurboPid=pid;activeTurboType=type;socket.setSoTimeout(120000);
-            int flags=0x04|0x10|((turboEngines&0x40)!=0?0x20:0);
-            ByteBuffer h=ByteBuffer.allocate(27).order(ByteOrder.LITTLE_ENDIAN);h.putInt(pid).putLong(start).putInt(length).put((byte)type).put((byte)11).put((byte)1).putInt(0).putInt(flags);
-            send(CMD_TURBO_START,h.array());expectSuccess("TurboScan snapshot start");expectSuccess("TurboScan snapshot setup");
-            ByteBuffer seg=ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(1).putLong(start).putInt(length);out.write(seg.array());out.flush();
-            long slots=readLongLE(),total=readLongLE();
-            while(readLongLE()!=-1L){}
-            int ok=readIntLE();long survivors=readLongLE();expectSuccess("TurboScan snapshot completion");socket.setSoTimeout(15000);
-            if(ok==0)throw new IOException("Console could not store the memory snapshot; choose a smaller range.");
-            return survivors;
+        synchronized long turboUnknownFirstScan(int pid,List<TurboSegment> segments,int type,int alignment) throws IOException {
+            if(type>9)throw new IOException("Unknown-value snapshots support numeric types only.");
+            auth();activeTurboPid=pid;activeTurboType=type;socket.setSoTimeout(120000);int flags=0x04|0x10|((turboEngines&0x40)!=0?0x20:0);TurboSegment first=segments.get(0);byte[] blob=turboSegmentsBlob(segments);
+            ByteBuffer h=ByteBuffer.allocate(27).order(ByteOrder.LITTLE_ENDIAN);h.putInt(pid).putLong(first.start).putInt(first.length).put((byte)type).put((byte)11).put((byte)alignment).putInt(0).putInt(flags);
+            send(CMD_TURBO_START,h.array());expectSuccess("TurboScan snapshot start");expectSuccess("TurboScan snapshot setup");out.write(blob);out.flush();
+            long slots=readLongLE(),total=readLongLE();while(readLongLE()!=-1L){}int ok=readIntLE();long survivors=readLongLE();expectSuccess("TurboScan snapshot completion");socket.setSoTimeout(15000);
+            if(ok==0)throw new IOException("Console could not store the memory snapshot; choose a smaller range.");return survivors;
         }
         synchronized long turboNextScan(int compare,byte[] value,int valueLength) throws IOException {
             auth();socket.setSoTimeout(120000);boolean needsValue=(compare==0||compare==2||compare==3||compare==4||compare==6||compare==8);
