@@ -1,10 +1,11 @@
 # Feature implementation status
 
-| Pointer scanner | Partial (CI pending) | Bounded client-side pointer map over writable non-executable regions; 8-byte aligned candidates; configurable scan budget, maximum offset and depth; multi-level chains rooted in named modules; cancellation; candidate/result caps | Needs turbo-assisted map construction, BSS/module alias handling, map/result save-load, live-chain resolve/rescan and physical-console performance validation |
+Last updated: 2026-11-02. Added a bounded multi-level pointer scanner (writable non-executable memory map, module-rooted chain search, configurable offset/depth/budget and cancel control); CI validation pending. Paged hex editor, address-table write verification, freeze controls, call stack and code-cave finder are also present.
 
 Legend: **Implemented** = code path exists; **Partial** = limited subset only; **Pending** = not implemented; **Test pending** = code exists but CI/device validation is not complete.
 
 | Feature area | Status | What exists now | Still needed |
+| Pointer scanner | Partial (CI pending) | Bounded client-side pointer map over writable non-executable regions; 8-byte aligned candidates; configurable scan budget, maximum offset and depth; multi-level chains rooted in named modules; cancellation; candidate/result caps | Needs turbo-assisted map construction, BSS/module alias handling, map/result save-load, live-chain resolve/rescan and physical-console performance validation |
 |---|---|---|---|
 | Android app shell / readable mobile layout | Implemented (not device-tested) | Native Android screen, scroll layout, dark high-contrast panels, operation log | Phone/tablet UI regression and accessibility testing |
 | TCP console connection | Partial | Connect/disconnect on port 744; protocol version handshake | Correct connection error recovery, discovery, firmware/branding/platform capability queries |
