@@ -163,7 +163,7 @@ public class MainActivity extends Activity {
         turboType.setSelection(4);
         page.addView(turboType);
         turboCompare = new Spinner(this);
-        String[] compareLabels = {"Exact value", "Bigger than", "Smaller than", "Between low/high", "Increased", "Increased by", "Decreased", "Decreased by", "Changed", "Unchanged"};
+        String[] compareLabels = {"Exact value", "Bigger than", "Smaller than", "Between low/high", "Increased", "Increased by", "Decreased", "Decreased by", "Changed", "Unchanged", "Unknown initial value"};
         turboCompare.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, compareLabels));
         page.addView(turboCompare);
         turboValue = field("Value (for Between use low,high)", "100"); page.addView(turboValue);
@@ -564,11 +564,11 @@ public class MainActivity extends Activity {
         scanClient.auth();
     }
     private byte[] encodeTurboCompareValue(int type,int compare,String raw) {
-        if(compare==5||compare==7||compare==9||compare==10) return new byte[0];
+        if(compare==5||compare==7||compare==9||compare==10||compare==11) return new byte[0];
         if(compare==4) { String[] pair=raw.split(",",2); if(pair.length!=2) throw new IllegalArgumentException("Between scan needs two comma-separated values: low,high"); byte[] lo=encodeTurboValue(type,pair[0].trim()),hi=encodeTurboValue(type,pair[1].trim()); byte[] both=Arrays.copyOf(lo,lo.length+hi.length);System.arraycopy(hi,0,both,lo.length,hi.length);return both; }
         return encodeTurboValue(type,raw);
     }
-    private static final int[] TURBO_COMPARE_CODES={0,2,3,4,5,6,7,8,9,10};
+    private static final int[] TURBO_COMPARE_CODES={0,2,3,4,5,6,7,8,9,10,11};
     private void turboFirstScan() {
         if(!connected) { toast("Connect to the PS5 first."); return; }
         runAsync("Starting TurboScan",()->{
@@ -577,9 +577,9 @@ public class MainActivity extends Activity {
             int length=Integer.decode(scanLength.getText().toString().trim());
             if(length<1) throw new IllegalArgumentException("Enter a positive scan range.");
             int type=turboType.getSelectedItemPosition(); int ci=turboCompare.getSelectedItemPosition();
-            if(ci>3) throw new IllegalArgumentException("First scan supports Exact, Bigger, Smaller or Between. Other comparisons are for Next Scan.");
+            if(ci>3 && ci!=10) throw new IllegalArgumentException("First scan supports Exact, Bigger, Smaller, Between or Unknown Initial Value.");
             int compare=TURBO_COMPARE_CODES[ci]; byte[] value=encodeTurboCompareValue(type,compare,turboValue.getText().toString().trim());
-            long count=scanClient.turboFirstScan(p,start,length,type,compare,value);
+            long count=compare==11?scanClient.turboUnknownFirstScan(p,start,length,type):scanClient.turboFirstScan(p,start,length,type,compare,value);
             turboActive=true; turboValueType=type; turboValueLength=(type==4||type==5?4:type==6||type==7||type==9?8:type==8?4:type==2||type==3?2:1); turboResultTotal=count;
             return "TurboScan started. Results: "+count+"\\nRange: 0x"+Long.toHexString(start)+" – 0x"+Long.toHexString(start+(long)length);
         },result->turboResult.setText(result));
@@ -588,7 +588,8 @@ public class MainActivity extends Activity {
         if(!connected || !turboActive || scanClient==null) { toast("Run Turbo First Scan first."); return; }
         runAsync("Refining TurboScan",()->{
             if(turboType.getSelectedItemPosition()!=turboValueType) throw new IllegalArgumentException("Value type cannot change during a scan.");
-            int compare=TURBO_COMPARE_CODES[turboCompare.getSelectedItemPosition()];
+            int ci=turboCompare.getSelectedItemPosition(); if(ci==10) throw new IllegalArgumentException("Unknown Initial Value is only available for First Scan.");
+            int compare=TURBO_COMPARE_CODES[ci];
             byte[] value=encodeTurboCompareValue(turboValueType,compare,turboValue.getText().toString().trim());
             turboResultTotal=scanClient.turboNextScan(compare,value,turboValueLength);
             return "Next Scan complete. Remaining results: "+turboResultTotal;
@@ -966,7 +967,7 @@ public class MainActivity extends Activity {
         private static final int CMD_VERSION = (int)0xBD000001;
         private static final int CMD_TURBO_CAPS = (int)0xBDAACC10, CMD_TURBO_START = (int)0xBDAACC11, CMD_TURBO_COUNT = (int)0xBDAACC12, CMD_TURBO_GET = (int)0xBDAACC13, CMD_TURBO_END = (int)0xBDAACC14, CMD_PROC_AUTH = (int)0xBDAACCFF;
         private boolean authenticated=false;
-        private int activeTurboPid=0, activeTurboType=4;
+        private int activeTurboPid=0, activeTurboType=4, turboEngines=0;
         private static final int CMD_PROC_LIST = (int)0xBDAA0001;
         private static final int CMD_PROC_READ = (int)0xBDAA0002;
         private static final int CMD_PROC_WRITE = (int)0xBDAA0003;
@@ -1010,7 +1011,7 @@ public class MainActivity extends Activity {
         synchronized TurboCaps turboCaps() throws IOException {
             if(!isConnected()) throw new IOException("Not connected.");
             socket.setSoTimeout(4000);
-            try { send(CMD_TURBO_CAPS,new byte[0]); int st=readIntLE(); if(st!=SUCCESS)return null; byte[] raw=readBytes(16); ByteBuffer b=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN); TurboCaps c=new TurboCaps(); c.version=b.getInt();c.engines=b.getInt();c.threads=b.getInt();b.getInt();return c; }
+            try { send(CMD_TURBO_CAPS,new byte[0]); int st=readIntLE(); if(st!=SUCCESS)return null; byte[] raw=readBytes(16); ByteBuffer b=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN); TurboCaps c=new TurboCaps(); c.version=b.getInt();c.engines=b.getInt();c.threads=b.getInt();b.getInt();turboEngines=c.engines;return c; }
             catch(java.net.SocketTimeoutException e){close();return null;}
             finally{if(isConnected())socket.setSoTimeout(15000);}
         }
@@ -1024,6 +1025,19 @@ public class MainActivity extends Activity {
             byte[] raw=readBytes(12);ByteBuffer r=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);int stored=r.getInt();long count=r.getLong();
             if(stored==0){if(readLongLE()!=-1L)throw new IOException("Unexpected TurboScan decline response.");expectSuccess("TurboScan decline");throw new IOException("Too many matches for the payload result list. Narrow the range.");}
             expectSuccess("TurboScan completion");socket.setSoTimeout(15000);return count;
+        }
+        synchronized long turboUnknownFirstScan(int pid,long start,int length,int type) throws IOException {
+            if(type>9) throw new IOException("Unknown-value snapshots support numeric types only.");
+            auth();activeTurboPid=pid;activeTurboType=type;socket.setSoTimeout(120000);
+            int flags=0x04|0x10|((turboEngines&0x40)!=0?0x20:0);
+            ByteBuffer h=ByteBuffer.allocate(27).order(ByteOrder.LITTLE_ENDIAN);h.putInt(pid).putLong(start).putInt(length).put((byte)type).put((byte)11).put((byte)1).putInt(0).putInt(flags);
+            send(CMD_TURBO_START,h.array());expectSuccess("TurboScan snapshot start");expectSuccess("TurboScan snapshot setup");
+            ByteBuffer seg=ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN).putInt(1).putLong(start).putLong(length&0xFFFFFFFFL);out.write(seg.array());out.flush();
+            long slots=readLongLE(),total=readLongLE();
+            while(readLongLE()!=-1L){}
+            int ok=readIntLE();long survivors=readLongLE();expectSuccess("TurboScan snapshot completion");socket.setSoTimeout(15000);
+            if(ok==0)throw new IOException("Console could not store the memory snapshot; choose a smaller range.");
+            return survivors;
         }
         synchronized long turboNextScan(int compare,byte[] value,int valueLength) throws IOException {
             auth();socket.setSoTimeout(120000);boolean needsValue=(compare==0||compare==2||compare==3||compare==4||compare==6||compare==8);
