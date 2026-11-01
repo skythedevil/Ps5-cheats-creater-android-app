@@ -2,6 +2,10 @@
 
 Android companion/port based on the public PS5Debug-studio V1.5 project (Apache-2.0). This is a mobile-first implementation, not a repackaged Windows executable.
 
+## Development status
+
+This repository is an in-progress Android port. The first debug build was only a connectivity/memory/patch prototype and is **not** a feature-complete release. No APK should be presented as finished until the [V1.5 parity checklist](PARITY_CHECKLIST.md) is complete and the applicable tests pass.
+
 ## V1 mobile scope
 - Connect to a PS5 running ps5debug-NG over the local network (TCP 744)
 - List processes and inspect process metadata
