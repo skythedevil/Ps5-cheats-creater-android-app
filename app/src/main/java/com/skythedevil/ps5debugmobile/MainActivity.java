@@ -46,7 +46,8 @@ public class MainActivity extends Activity {
     private EditText host, port, pid, readAddress, readLength, writeAddress, writeBytes;
     private EditText scanAddress, scanLength, scanBytes;
     private EditText gameName, titleId, gameVersion, cheatName, cheatAddress, cheatBytes;
-    private TextView connectionStatus, processInfo, memoryResult, scanResult, cheatStatus;
+    private TextView connectionStatus, processInfo, memoryResult, scanResult, cheatStatus, mapResult, debugResult, disasmResult;
+    private EditText mapFilter, disasmAddress, disasmLength, xrefTarget, breakpointIndex, breakpointAddress, watchIndex, watchAddress, threadId;
     private Spinner processSpinner;
     private LinearLayout cheatList;
     private Button connectButton;
@@ -143,7 +144,67 @@ public class MainActivity extends Activity {
         page.addView(scanResult);
         scan.setOnClickListener(v -> scanRange());
 
-        section(page, "05  CHEAT LIBRARY", "Imports and exports PS5 Debug Studio game JSON (ps5cheat/1). V1 runs fixed patch steps only.");
+        section(page, "05  MEMORY MAPS & CODE INSPECTION", "Inspect mapped modules/regions, decode x86-64 instruction boundaries using the payload, and search RIP-relative cross-references.");
+        mapFilter = field("Optional module/name filter", "");
+        page.addView(mapFilter);
+        Button loadMaps = button("LOAD PROCESS MAPS", PANEL);
+        page.addView(loadMaps);
+        mapResult = text("Memory maps not loaded.", 11, MUTED, false);
+        mapResult.setTypeface(Typeface.MONOSPACE);
+        page.addView(mapResult);
+        disasmAddress = field("Disassembly address", "0x0");
+        disasmLength = field("Bytes to decode (max 4096)", "256");
+        page.addView(disasmAddress); page.addView(disasmLength);
+        Button disassemble = button("DISASSEMBLE REGION", PANEL);
+        page.addView(disassemble);
+        disasmResult = text("No disassembly loaded.", 11, MUTED, false);
+        disasmResult.setTypeface(Typeface.MONOSPACE);
+        page.addView(disasmResult);
+        xrefTarget = field("Find references to address", "0x0");
+        page.addView(xrefTarget);
+        Button xrefs = button("FIND RIP-RELATIVE REFERENCES", PANEL);
+        page.addView(xrefs);
+        loadMaps.setOnClickListener(v -> loadMaps());
+        disassemble.setOnClickListener(v -> disassembleRegion());
+        xrefs.setOnClickListener(v -> findXrefs());
+
+        section(page, "06  DEBUGGER", "Attach/detach, software breakpoints, hardware watchpoints, thread listing and register inspection. Full async stepping/event UI is still pending.");
+        breakpointIndex = field("Breakpoint slot (0–29)", "0");
+        breakpointAddress = field("Breakpoint address", "0x0");
+        page.addView(breakpointIndex); page.addView(breakpointAddress);
+        LinearLayout bpRow = new LinearLayout(this);
+        Button bpOn = button("SET BREAKPOINT", PANEL);
+        Button bpOff = button("CLEAR BREAKPOINT", PANEL);
+        bpRow.addView(bpOn, new LinearLayout.LayoutParams(0, dp(48), 1));
+        LinearLayout.LayoutParams bpRight = new LinearLayout.LayoutParams(0, dp(48), 1); bpRight.setMargins(dp(6),0,0,0);
+        bpRow.addView(bpOff, bpRight); page.addView(bpRow);
+        watchIndex = field("Watchpoint slot (0–3)", "0");
+        watchAddress = field("Watch address", "0x0");
+        page.addView(watchIndex); page.addView(watchAddress);
+        Button watchOn = button("SET WRITE WATCHPOINT", PANEL);
+        Button watchOff = button("CLEAR WATCHPOINT", PANEL);
+        page.addView(watchOn); page.addView(watchOff);
+        Button attach = button("ATTACH DEBUGGER", ACCENT);
+        Button detach = button("DETACH DEBUGGER", PANEL);
+        Button threads = button("LIST THREADS", PANEL);
+        threadId = field("Thread/LWP ID", "");
+        Button regs = button("READ GENERAL REGISTERS", PANEL);
+        Button step = button("SINGLE STEP PROCESS", PANEL);
+        page.addView(attach); page.addView(detach); page.addView(threads); page.addView(threadId); page.addView(regs); page.addView(step);
+        debugResult = text("Debugger detached.", 11, MUTED, false);
+        debugResult.setTypeface(Typeface.MONOSPACE);
+        page.addView(debugResult);
+        bpOn.setOnClickListener(v -> setBreakpoint(true));
+        bpOff.setOnClickListener(v -> setBreakpoint(false));
+        watchOn.setOnClickListener(v -> setWatchpoint(true));
+        watchOff.setOnClickListener(v -> setWatchpoint(false));
+        attach.setOnClickListener(v -> debugAttach(true));
+        detach.setOnClickListener(v -> debugAttach(false));
+        threads.setOnClickListener(v -> listThreads());
+        regs.setOnClickListener(v -> readRegisters());
+        step.setOnClickListener(v -> debugStep());
+
+        section(page, "07  CHEAT LIBRARY", "Imports and exports PS5 Debug Studio game JSON (ps5cheat/1). V1 runs fixed patch steps only.");
         gameName = field("Game name", "");
         titleId = field("Title ID (e.g. PPSA01341)", "");
         gameVersion = field("Game version", "");
@@ -176,7 +237,7 @@ public class MainActivity extends Activity {
         importFile.setOnClickListener(v -> importJson());
         exportFile.setOnClickListener(v -> exportJson());
 
-        section(page, "06  ACTIVITY LOG", "Recent connection and operation results.");
+        section(page, "08  ACTIVITY LOG", "Recent connection and operation results.");
         logView = text("Ready.", 11, MUTED, false);
         logView.setTypeface(Typeface.MONOSPACE);
         page.addView(logView);
@@ -411,6 +472,113 @@ public class MainActivity extends Activity {
         }, value -> scanResult.setText(value));
     }
 
+    private void loadMaps() {
+        if (!connected) { toast("Connect to the PS5 first."); return; }
+        runAsync("Loading memory maps", () -> {
+            List<MapEntry> list = client.maps(currentPid());
+            String filter = mapFilter.getText().toString().trim().toLowerCase(Locale.US);
+            StringBuilder b = new StringBuilder("Regions: ").append(list.size()).append("\\n");
+            int shown = 0;
+            for (MapEntry e : list) {
+                if (!filter.isEmpty() && !e.name.toLowerCase(Locale.US).contains(filter)) continue;
+                b.append(String.format(Locale.US, "%016X-%016X  %s  prot=%d  off=%X\\n", e.start, e.end, e.name, e.prot, e.offset));
+                if (++shown >= 500) { b.append("… output capped at 500 rows"); break; }
+            }
+            return b.toString();
+        }, mapResult::setText);
+    }
+
+    private void disassembleRegion() {
+        if (!connected) { toast("Connect to the PS5 first."); return; }
+        runAsync("Disassembling region", () -> {
+            int p = currentPid();
+            long addr = resolveAddress(disasmAddress.getText().toString().trim(), p);
+            int len = Integer.decode(disasmLength.getText().toString().trim());
+            if (len < 1 || len > 4096) throw new IllegalArgumentException("Decode range must be 1–4096 bytes.");
+            List<DisasmEntry> entries = client.disassemble(p, addr, len, 256);
+            StringBuilder b = new StringBuilder("Address       Size  Kind  Bytes\\n");
+            for (DisasmEntry e : entries) b.append(String.format(Locale.US, "%016X  %2d    %02X    %s\\n", e.address, e.length, e.kind, toHex(e.bytes)));
+            if (entries.isEmpty()) b.append("No instructions returned.");
+            return b.toString();
+        }, disasmResult::setText);
+    }
+
+    private void findXrefs() {
+        if (!connected) { toast("Connect to the PS5 first."); return; }
+        runAsync("Finding references", () -> {
+            int p = currentPid();
+            long target = resolveAddress(xrefTarget.getText().toString().trim(), p);
+            List<MapEntry> regions = client.maps(p);
+            StringBuilder b = new StringBuilder("RIP-relative references to ").append(String.format("0x%X", target)).append(":\\n");
+            int total = 0;
+            for (MapEntry m : regions) {
+                if ((m.prot & 4) == 0) continue;
+                long size = Math.min(m.end - m.start, 1024 * 1024);
+                if (size <= 0) continue;
+                List<Long> hits = client.findXrefs(p, m.start, (int)size, target);
+                for (long h : hits) { b.append(String.format("0x%016X\\n", h)); if (++total >= 300) break; }
+                if (total >= 300) break;
+            }
+            if (total == 0) b.append("No references found in readable executable regions (first 1 MiB per region).");
+            return b.toString();
+        }, disasmResult::setText);
+    }
+
+    private void debugAttach(boolean attach) {
+        if (!connected) { toast("Connect to the PS5 first."); return; }
+        runAsync(attach ? "Attaching debugger" : "Detaching debugger", () -> {
+            client.debugAttach(currentPid(), attach);
+            return attach ? "Debugger attached. The payload should connect back to the phone on TCP 755; async event UI is pending." : "Debugger detached.";
+        }, debugResult::setText);
+    }
+
+    private void setBreakpoint(boolean enabled) {
+        if (!connected) { toast("Connect to the PS5 first."); return; }
+        runAsync(enabled ? "Setting breakpoint" : "Clearing breakpoint", () -> {
+            int slot = Integer.parseInt(breakpointIndex.getText().toString().trim());
+            long address = resolveAddress(breakpointAddress.getText().toString().trim(), currentPid());
+            client.breakpoint(slot, enabled, address);
+            return (enabled ? "Breakpoint set" : "Breakpoint cleared") + " at slot " + slot + " / 0x" + Long.toHexString(address);
+        }, debugResult::setText);
+    }
+
+    private void setWatchpoint(boolean enabled) {
+        if (!connected) { toast("Connect to the PS5 first."); return; }
+        runAsync(enabled ? "Setting watchpoint" : "Clearing watchpoint", () -> {
+            int slot = Integer.parseInt(watchIndex.getText().toString().trim());
+            long address = resolveAddress(watchAddress.getText().toString().trim(), currentPid());
+            client.watchpoint(slot, enabled, address, enabled ? 8 : 0, enabled ? 1 : 0);
+            return (enabled ? "8-byte write watchpoint set" : "Watchpoint cleared") + " at slot " + slot;
+        }, debugResult::setText);
+    }
+
+    private void listThreads() {
+        if (!connected) { toast("Connect to the PS5 first."); return; }
+        runAsync("Listing threads", () -> {
+            List<Integer> ids = client.threadList();
+            StringBuilder b = new StringBuilder("Threads/LWPs: ").append(ids.size()).append("\\n");
+            for (int id : ids) b.append(id).append("\\n");
+            return b.toString();
+        }, debugResult::setText);
+    }
+
+    private void readRegisters() {
+        if (!connected) { toast("Connect to the PS5 first."); return; }
+        runAsync("Reading registers", () -> {
+            int tid = Integer.parseInt(threadId.getText().toString().trim());
+            byte[] r = client.getRegisters(tid);
+            String[] names = {"r15","r14","r13","r12","r11","r10","r9","r8","rdi","rsi","rbp","rbx","rdx","rcx","rsp","rip","rflags"};
+            StringBuilder b = new StringBuilder();
+            for (int i=0;i<names.length;i++) b.append(String.format(Locale.US, "%-7s %016X\\n", names[i], ByteBuffer.wrap(r, i*8, 8).order(ByteOrder.LITTLE_ENDIAN).getLong()));
+            return b.toString();
+        }, debugResult::setText);
+    }
+
+    private void debugStep() {
+        if (!connected) { toast("Connect to the PS5 first."); return; }
+        runAsync("Single stepping process", () -> { client.debugStep(); return "Single-step command accepted."; }, debugResult::setText);
+    }
+
     private void createGameFile() {
         String name = gameName.getText().toString().trim();
         if (name.isEmpty()) { toast("Enter a game name."); return; }
@@ -631,6 +799,10 @@ public class MainActivity extends Activity {
         if (client != null) client.close();
     }
 
+    private static final class DisasmEntry {
+        final long address; final int length, kind; final byte[] bytes;
+        DisasmEntry(long a, int l, int k, byte[] b) { address=a; length=l; kind=k; bytes=b; }
+    }
     private static final class UndoPatch {
         final long address; final byte[] original;
         UndoPatch(long a, byte[] o) { address = a; original = o; }
@@ -656,6 +828,15 @@ public class MainActivity extends Activity {
         private static final int CMD_PROC_WRITE = (int)0xBDAA0003;
         private static final int CMD_PROC_MAPS = (int)0xBDAA0004;
         private static final int CMD_PROC_INFO = (int)0xBDAA000A;
+        private static final int CMD_PROC_DISASM_REGION = (int)0xBDAA0020;
+        private static final int CMD_PROC_FIND_XREFS_TO = (int)0xBDAA0022;
+        private static final int CMD_DEBUG_ATTACH = (int)0xBDBB0001;
+        private static final int CMD_DEBUG_DETACH = (int)0xBDBB0002;
+        private static final int CMD_DEBUG_SET_BREAKPOINT = (int)0xBDBB0003;
+        private static final int CMD_DEBUG_SET_WATCHPOINT = (int)0xBDBB0004;
+        private static final int CMD_DEBUG_GET_THREAD_LIST = (int)0xBDBB0005;
+        private static final int CMD_DEBUG_GETREGS = (int)0xBDBB0008;
+        private static final int CMD_DEBUG_STEP = (int)0xBDBB0012;
         private Socket socket;
         private DataInputStream in;
         private OutputStream out;
@@ -777,6 +958,72 @@ public class MainActivity extends Activity {
             out.write(data);
             out.flush();
             expectSuccess("Memory write");
+        }
+        synchronized List<DisasmEntry> disassemble(int pid, long address, int length, int max) throws IOException {
+            ByteBuffer body = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN);
+            body.putInt(pid).putLong(address).putInt(length).putInt(max);
+            send(CMD_PROC_DISASM_REGION, body.array());
+            expectSuccess("Disassembly");
+            List<DisasmEntry> out = new ArrayList<>();
+            while (true) {
+                byte[] raw = readBytes(32);
+                boolean end = true; for (byte v : raw) if ((v & 255) != 255) { end = false; break; }
+                if (end) break;
+                ByteBuffer b = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+                long addr = b.getLong(); b.getLong(); b.getLong();
+                int len = b.get() & 255; int kind = b.get() & 255;
+                b.get(); b.get(); b.get(); b.get(); b.getShort();
+                byte[] bytes = readMemoryForDisasm(pid, addr, len);
+                out.add(new DisasmEntry(addr, len, kind, bytes));
+                if (out.size() >= max) break;
+            }
+            return out;
+        }
+        private byte[] readMemoryForDisasm(int pid, long addr, int len) throws IOException {
+            // A disassembly operation cannot interleave another command on this socket.
+            ByteBuffer body = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(pid).putLong(addr).putInt(len);
+            send(CMD_PROC_READ, body.array()); expectSuccess("Instruction bytes"); return readBytes(len);
+        }
+        synchronized List<Long> findXrefs(int pid, long address, int length, long target) throws IOException {
+            ByteBuffer body = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN);
+            body.putInt(pid).putLong(address).putInt(length).putLong(target);
+            send(CMD_PROC_FIND_XREFS_TO, body.array()); expectSuccess("Find references");
+            List<Long> out = new ArrayList<>();
+            while (true) { long v = readLongLE(); if (v == -1L) break; out.add(v); if (out.size() >= 10000) break; }
+            return out;
+        }
+        synchronized void debugAttach(int pid, boolean attach) throws IOException {
+            if (attach) {
+                send(CMD_DEBUG_ATTACH, ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(pid).array());
+                expectSuccess("Debug attach");
+            } else { send(CMD_DEBUG_DETACH, new byte[0]); expectSuccess("Debug detach"); }
+        }
+        synchronized void breakpoint(int index, boolean enabled, long address) throws IOException {
+            if (index < 0 || index > 29) throw new IOException("Breakpoint slot must be 0–29.");
+            ByteBuffer b = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
+            b.putInt(index).putInt(enabled ? 1 : 0).putLong(address);
+            send(CMD_DEBUG_SET_BREAKPOINT, b.array()); expectSuccess("Breakpoint");
+        }
+        synchronized void watchpoint(int index, boolean enabled, long address, int length, int type) throws IOException {
+            if (index < 0 || index > 3) throw new IOException("Watchpoint slot must be 0–3.");
+            // DR7 encodings: RW=1 write, LEN=2 eight-byte.
+            int lenCode = length == 8 ? 2 : 0;
+            int breakType = type == 1 ? 1 : 0;
+            ByteBuffer b = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN);
+            b.putInt(index).putInt(enabled ? 1 : 0).putInt(lenCode).putInt(breakType).putLong(address);
+            send(CMD_DEBUG_SET_WATCHPOINT, b.array()); expectSuccess("Watchpoint");
+        }
+        synchronized List<Integer> threadList() throws IOException {
+            send(CMD_DEBUG_GET_THREAD_LIST, new byte[0]); expectSuccess("Thread list");
+            int n = readIntLE(); if (n < 0 || n > 4096) throw new IOException("Invalid thread count.");
+            List<Integer> out = new ArrayList<>(); for (int i=0;i<n;i++) out.add(readIntLE()); return out;
+        }
+        synchronized byte[] getRegisters(int tid) throws IOException {
+            send(CMD_DEBUG_GETREGS, ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(tid).array());
+            expectSuccess("Get registers"); return readBytes(176);
+        }
+        synchronized void debugStep() throws IOException {
+            send(CMD_DEBUG_STEP, new byte[0]); expectSuccess("Single step");
         }
         private static String cString(byte[] b, int off, int len) {
             int end = off;
