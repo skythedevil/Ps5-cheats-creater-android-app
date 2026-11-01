@@ -12,7 +12,8 @@ Legend: **Implemented** = code path exists; **Partial** = limited subset only; *
 | Memory maps/modules | Implemented (not live-tested) | Map list, module-name filter, start/end/protection/offset display | Better module grouping, export and region filtering |
 | Memory read | Implemented (not live-tested) | Address read, bounded 1–4096 bytes, hex dump | Paging, typed display, bulk reads |
 | Memory write | Implemented (not live-tested) | Exact hex-byte writes up to 4096 bytes | Typed writes, undo history, multi-write and freeze |
-| Exact byte scan | Partial | Client-side exact pattern scan over a user range capped at 16 MiB | Native TurboScan, staged scans, numeric/string/AOB wildcard scan, filters, paging and cancellation |
+| Exact byte scan | Partial | Client-side exact pattern scan over a user range capped at 16 MiB | AOB wildcard support, filters, paging and cancellation |
+| Turbo value scanner | Partial (not live-tested) | Dedicated second connection, TurboScan capability probe, payload auth handshake, server-resident exact first scan, exact-value next scan and first-100 result retrieval for byte/integer/float/double types | Unknown-value snapshots, comparison modes, between/fuzzy scans, segmented multi-region scans, full result paging/live refresh, cancel and real-console validation |
 | Value scanner | Pending | — | First/next scans for all value types and compare modes |
 | Address list / freeze table | Pending | — | Add/edit/remove, live refresh, freeze/unfreeze, persistence, copy as cheat |
 | Hex editor | Partial | Hex dump output in memory read panel | Interactive paged editor, typed cursor values, selection/copy, edit/revert, dump |
@@ -52,6 +53,6 @@ Legend: **Implemented** = code path exists; **Partial** = limited subset only; *
 
 - The debugger controls are not complete without the asynchronous TCP 755 event channel; do not treat stepping/breakpoints as fully usable until that is added and tested.
 - The disassembly panel currently shows payload instruction boundaries/kinds and raw bytes; it is not yet a full mnemonic disassembler.
-- The exact-byte scanner is a small-range fallback and is not a substitute for the original server-side TurboScan engine.
+- The exact-byte scanner is a small-range fallback. An initial TurboScan exact-value path has now been added, but it is not yet a complete replacement for the desktop scanner and has not been live-tested.
 - UDP discovery is now implemented in source but has not been verified against a physical console or different Android Wi-Fi networks.\n- No physical console validation has been claimed.
 - No APK is to be shared as a user release until the release gate in [PARITY_CHECKLIST.md](PARITY_CHECKLIST.md) is met.
