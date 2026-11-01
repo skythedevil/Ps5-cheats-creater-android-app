@@ -63,6 +63,11 @@ public class MainActivity extends Activity {
     private Spinner processSpinner;
     private LinearLayout cheatList;
     private Button connectButton;
+    private EditText addressEntryName, addressEntryAddress, addressEntryBytes;
+    private LinearLayout addressRows;
+    private final List<AddressEntry> addressEntries = new ArrayList<>();
+    private final Handler addressHandler = new Handler(Looper.getMainLooper());
+    private final Runnable addressFreezeTick = new Runnable() { @Override public void run() { refreshFrozenAddresses(); if (!addressEntries.isEmpty()) addressHandler.postDelayed(this, 1000); } };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -146,6 +151,19 @@ public class MainActivity extends Activity {
         Button write = button("WRITE MEMORY", PANEL);
         page.addView(write);
         write.setOnClickListener(v -> writeMemory());
+
+        section(page, "03B  ADDRESS LIST & FREEZE", "Save memory addresses, refresh values, edit bytes and freeze selected entries at one-second intervals.");
+        addressEntryName=field("Entry name", "Money");
+        addressEntryAddress=field("Address", "0x0");
+        addressEntryBytes=field("Value bytes (hex)", "00 00 00 00");
+        page.addView(addressEntryName); page.addView(addressEntryAddress); page.addView(addressEntryBytes);
+        LinearLayout addressActions=new LinearLayout(this); addressActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button addAddress=button("ADD ADDRESS", ACCENT), refreshAddresses=button("REFRESH ALL", PANEL);
+        addressActions.addView(addAddress,new LinearLayout.LayoutParams(0,-2,1)); addressActions.addView(refreshAddresses,new LinearLayout.LayoutParams(0,-2,1)); page.addView(addressActions);
+        addressRows=new LinearLayout(this); addressRows.setOrientation(LinearLayout.VERTICAL); page.addView(addressRows);
+        addAddress.setOnClickListener(v->addAddressEntry());
+        refreshAddresses.setOnClickListener(v->refreshAddressEntries());
+        loadAddressEntries();
 
         section(page, "04  EXACT BYTE SCAN", "Scans a chosen range for an exact byte pattern. Each scan is capped at 16 MiB to keep mobile memory and network use bounded.");
         scanAddress = field("Start address", "0x0");
@@ -505,6 +523,71 @@ public class MainActivity extends Activity {
             memoryResult.setText(value);
             log(value);
         });
+    }
+
+
+    private static final class AddressEntry {
+        String name, address, bytes; boolean frozen;
+        AddressEntry(String n,String a,String b,boolean f){name=n;address=a;bytes=b;frozen=f;}
+    }
+    private void loadAddressEntries() {
+        addressEntries.clear();
+        try {
+            JSONArray arr=new JSONArray(getSharedPreferences("address_table",MODE_PRIVATE).getString("entries","[]"));
+            for(int i=0;i<arr.length();i++){JSONObject o=arr.getJSONObject(i);addressEntries.add(new AddressEntry(o.optString("name","Entry"),o.optString("address","0x0"),o.optString("bytes","00"),o.optBoolean("frozen",false)));}
+        } catch(Exception e){log("Saved address table could not be loaded: "+e.getMessage());}
+        renderAddressEntries();
+        if(addressEntries.stream().anyMatch(e->e.frozen)) addressHandler.removeCallbacks(addressFreezeTick);
+    }
+    private void saveAddressEntries() {
+        JSONArray arr=new JSONArray();
+        for(AddressEntry e:addressEntries){JSONObject o=new JSONObject();try{o.put("name",e.name);o.put("address",e.address);o.put("bytes",e.bytes);o.put("frozen",e.frozen);}catch(JSONException ignored){}arr.put(o);}
+        getSharedPreferences("address_table",MODE_PRIVATE).edit().putString("entries",arr.toString()).apply();
+    }
+    private void addAddressEntry() {
+        try {
+            String n=addressEntryName.getText().toString().trim(),a=addressEntryAddress.getText().toString().trim(),b=toHex(parseHex(addressEntryBytes.getText().toString()));
+            if(a.isEmpty()||b.isEmpty())throw new IllegalArgumentException("Enter an address and at least one byte.");
+            addressEntries.add(new AddressEntry(n.isEmpty()?"Entry "+(addressEntries.size()+1):n,a,b,false));
+            saveAddressEntries();renderAddressEntries();log("Address added: "+a);
+        } catch(Exception e){toast(e.getMessage());}
+    }
+    private void renderAddressEntries() {
+        if(addressRows==null)return;
+        addressRows.removeAllViews();
+        for(int i=0;i<addressEntries.size();i++){
+            final int index=i;AddressEntry e=addressEntries.get(i);
+            LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(8),dp(6),dp(8),dp(6));card.setBackgroundTintList(android.content.res.ColorStateList.valueOf(PANEL));
+            TextView label=text(e.name+"  "+e.address+"\n"+e.bytes+(e.frozen?"  [FROZEN]":""),12,TEXT,true);label.setTypeface(Typeface.MONOSPACE);card.addView(label);
+            LinearLayout actions=new LinearLayout(this);actions.setOrientation(LinearLayout.HORIZONTAL);
+            Button read=button("READ",PANEL),edit=button("EDIT",PANEL),freeze=button(e.frozen?"UNFREEZE":"FREEZE",e.frozen?GREEN:PANEL),remove=button("REMOVE",PANEL);
+            for(Button b:new Button[]{read,edit,freeze,remove})actions.addView(b,new LinearLayout.LayoutParams(0,-2,1));
+            card.addView(actions);addressRows.addView(card,new LinearLayout.LayoutParams(-1,-2));
+            read.setOnClickListener(v->readAddressEntry(index));
+            edit.setOnClickListener(v->editAddressEntry(index));
+            freeze.setOnClickListener(v->{addressEntries.get(index).frozen=!addressEntries.get(index).frozen;saveAddressEntries();renderAddressEntries();if(addressEntries.stream().anyMatch(x->x.frozen)){addressHandler.removeCallbacks(addressFreezeTick);addressHandler.post(addressFreezeTick);}else addressHandler.removeCallbacks(addressFreezeTick);});
+            remove.setOnClickListener(v->{addressEntries.remove(index);saveAddressEntries();renderAddressEntries();});
+        }
+    }
+    private void readAddressEntry(int index) {
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        AddressEntry e=addressEntries.get(index);
+        runAsync("Reading address entry",()->{long a=resolveAddress(e.address,currentPid());byte[] data=client.read(currentPid(),a,parseHex(e.bytes).length);e.bytes=toHex(data);saveAddressEntries();return e.name+": "+e.bytes;},r->{renderAddressEntries();log(r);});
+    }
+    private void editAddressEntry(int index) {
+        AddressEntry e=addressEntries.get(index);LinearLayout box=new LinearLayout(this);box.setPadding(dp(12),0,dp(12),0);box.setOrientation(LinearLayout.VERTICAL);
+        EditText name=field("Name",e.name),addr=field("Address",e.address),bytes=field("Value bytes (hex)",e.bytes);box.addView(name);box.addView(addr);box.addView(bytes);
+        new android.app.AlertDialog.Builder(this).setTitle("Edit address entry").setView(box).setNegativeButton("Cancel",null).setPositiveButton("SAVE",(d,w)->{try{parseHex(bytes.getText().toString());e.name=name.getText().toString().trim();e.address=addr.getText().toString().trim();e.bytes=toHex(parseHex(bytes.getText().toString()));saveAddressEntries();renderAddressEntries();}catch(Exception ex){toast(ex.getMessage());}}).show();
+    }
+    private void refreshAddressEntries() {
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        runAsync("Refreshing address table",()->{for(AddressEntry e:addressEntries){long a=resolveAddress(e.address,currentPid());e.bytes=toHex(client.read(currentPid(),a,parseHex(e.bytes).length));}saveAddressEntries();return "Refreshed "+addressEntries.size()+" address entries.";},r->{renderAddressEntries();log(r);});
+    }
+    private void refreshFrozenAddresses() {
+        if(!connected)return;
+        List<AddressEntry> frozen=new ArrayList<>();for(AddressEntry e:addressEntries)if(e.frozen)frozen.add(e);
+        if(frozen.isEmpty())return;
+        worker.execute(()->{try{for(AddressEntry e:frozen){long a=resolveAddress(e.address,currentPid());client.write(currentPid(),a,parseHex(e.bytes));}}catch(Exception ex){log("Freeze write failed: "+ex.getMessage());}});
     }
 
     private void scanRange() {
