@@ -393,6 +393,8 @@ public class MainActivity extends Activity {
         if (connected) {
             worker.execute(() -> {
                 if (client != null) client.close();
+                if (scanClient != null) scanClient.close();
+                scanClient = null; turboActive = false;
                 client = null;
                 connected = false;
                 main.post(() -> {
@@ -913,6 +915,7 @@ public class MainActivity extends Activity {
         super.onDestroy();
         worker.shutdownNow();
         if (client != null) client.close();
+        if (scanClient != null) scanClient.close();
     }
 
     private static final class DisasmEntry {
@@ -993,18 +996,18 @@ public class MainActivity extends Activity {
         private int readUShortLE() throws IOException {byte[] b=readBytes(2);return(b[0]&255)|((b[1]&255)<<8);}
         synchronized void auth() throws IOException {if(authenticated)return;ByteBuffer h=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(0xBB40E64D).putInt(2);send(CMD_PROC_AUTH,h.array());expectSuccess("TurboScan auth");int n=readUShortLE();if(n>4096)throw new IOException("Invalid auth challenge.");byte[] ch=readBytes(n),key=authKey();for(int i=0;i<n;i++)ch[i]=(byte)(ch[i]^key[i&255]);out.write(ch);out.flush();expectSuccess("TurboScan auth response");authenticated=true;}
         synchronized long turboFirstScan(int pid,long start,int length,int type,byte[] value) throws IOException {
-            auth(); activeTurboPid=pid;activeTurboType=type;
+            auth(); activeTurboPid=pid;activeTurboType=type; socket.setSoTimeout(120000);
             ByteBuffer h=ByteBuffer.allocate(27).order(ByteOrder.LITTLE_ENDIAN);h.putInt(pid).putLong(start).putInt(length).put((byte)type).put((byte)0).put((byte)1).putInt(value.length).putInt(0x12);
             send(CMD_TURBO_START,h.array());expectSuccess("TurboScan start");out.write(value);out.flush();expectSuccess("TurboScan setup");
             ByteBuffer seg=ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(1).putLong(start).putInt(length);out.write(seg.array());out.flush();
             byte[] raw=readBytes(12);ByteBuffer r=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);int stored=r.getInt();long count=r.getLong();
             if(stored==0){if(readLongLE()!=-1L)throw new IOException("Unexpected TurboScan decline response.");expectSuccess("TurboScan decline");throw new IOException("Too many matches for the payload result list. Narrow the range.");}
-            expectSuccess("TurboScan completion");return count;
+            expectSuccess("TurboScan completion");socket.setSoTimeout(15000);return count;
         }
         synchronized long turboNextExact(byte[] value) throws IOException {
-            auth();ByteBuffer h=ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);h.putInt(activeTurboPid).putLong(0L).put((byte)activeTurboType).put((byte)0).putInt(value.length).putInt(0x02);
+            auth();socket.setSoTimeout(120000);ByteBuffer h=ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);h.putInt(activeTurboPid).putLong(0L).put((byte)activeTurboType).put((byte)0).putInt(value.length).putInt(0x02);
             send(CMD_TURBO_COUNT,h.array());expectSuccess("TurboScan next scan");out.write(value);out.flush();
-            while(readLongLE()!=-1L){} long count=readLongLE();expectSuccess("TurboScan next scan completion");return count;
+            while(readLongLE()!=-1L){} long count=readLongLE();expectSuccess("TurboScan next scan completion");socket.setSoTimeout(15000);return count;
         }
         synchronized List<TurboResult> turboGet(int start,int count,int valueLength) throws IOException {
             ByteBuffer h=ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).putInt(start).putInt(count).putInt(0);send(CMD_TURBO_GET,h.array());expectSuccess("TurboScan get");
