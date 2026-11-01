@@ -726,20 +726,27 @@ public class MainActivity extends Activity {
         long min=turboStartAddress.getText().toString().trim().isEmpty()?0L:resolveAddress(turboStartAddress.getText().toString().trim(),p);
         long max=turboStopAddress.getText().toString().trim().isEmpty()?Long.MAX_VALUE:resolveAddress(turboStopAddress.getText().toString().trim(),p);
         if(max<=min) throw new IllegalArgumentException("Stop address must be greater than start address.");
-        List<MapEntry> maps=scanClient.maps(p);
-        List<PS5Client.TurboRegion> classified=turboSkipSlow.isChecked()?scanClient.turboRegions(p):Collections.emptyList();
+        if((scanClient.turboEngines&0x10)==0) throw new IllegalStateException("This PS5 payload does not advertise disjoint-region TurboScan support. Update the PS5Debug payload before using filtered scans.");
         List<TurboSegment> out=new ArrayList<>();
-        for(MapEntry m:maps) {
-            if((m.prot&1)==0) continue;
-            if(turboWritableOnly.isChecked()&&(m.prot&2)==0) continue;
-            if(!turboIncludeExec.isChecked()&&(m.prot&4)!=0) continue;
-            long a=Math.max(m.start,min), b=Math.min(m.end,max); if(b<=a) continue;
-            if(turboSkipSlow.isChecked()) {
-                boolean slow=false, matched=false;
-                for(PS5Client.TurboRegion r:classified) if(r.end>a&&r.start<b) { matched=true; if((r.flags&1)!=0||r.mbps<100) slow=true; }
-                if(!matched||slow) continue;
+        if(turboSkipSlow.isChecked()) {
+            List<PS5Client.TurboRegion> regions=scanClient.turboRegions(p);
+            for(PS5Client.TurboRegion r:regions) {
+                if((r.prot&1)==0) continue;
+                if(turboWritableOnly.isChecked()&&(r.prot&2)==0) continue;
+                if(!turboIncludeExec.isChecked()&&(r.prot&4)!=0) continue;
+                if((r.flags&1)!=0||r.mbps<100) continue;
+                long a=Math.max(r.start,min), b=Math.min(r.end,max);
+                while(b>a) { int n=(int)Math.min(b-a,0x40000000L); if(n>0)out.add(new TurboSegment(a,n)); a+=n; }
             }
-            while(b>a) { int n=(int)Math.min(b-a,0x40000000L); if(n>0)out.add(new TurboSegment(a,n)); a+=n; }
+        } else {
+            List<MapEntry> maps=scanClient.maps(p);
+            for(MapEntry m:maps) {
+                if((m.prot&1)==0) continue;
+                if(turboWritableOnly.isChecked()&&(m.prot&2)==0) continue;
+                if(!turboIncludeExec.isChecked()&&(m.prot&4)!=0) continue;
+                long a=Math.max(m.start,min), b=Math.min(m.end,max);
+                while(b>a) { int n=(int)Math.min(b-a,0x40000000L); if(n>0)out.add(new TurboSegment(a,n)); a+=n; }
+            }
         }
         out.sort((x,y)->Long.compare(x.start,y.start));
         List<TurboSegment> merged=new ArrayList<>();
