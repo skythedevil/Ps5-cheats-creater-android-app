@@ -45,7 +45,8 @@ public class MainActivity extends Activity {
 
     private EditText host, port, pid, readAddress, readLength, writeAddress, writeBytes;
     private EditText scanAddress, scanLength, scanBytes;
-    private EditText turboValue;
+    private EditText turboValue, turboResultStart, turboResultCount;
+    private long turboResultTotal=0;
     private Spinner turboType;
     private Spinner turboCompare;
     private TextView turboResult;
@@ -165,7 +166,9 @@ public class MainActivity extends Activity {
         String[] compareLabels = {"Exact value", "Bigger than", "Smaller than", "Between low/high", "Increased", "Increased by", "Decreased", "Decreased by", "Changed", "Unchanged"};
         turboCompare.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, compareLabels));
         page.addView(turboCompare);
-        turboValue = field("Exact value to find", "100"); page.addView(turboValue);
+        turboValue = field("Value (for Between use low,high)", "100"); page.addView(turboValue);
+        turboResultStart=field("Result page start index", "0"); turboResultCount=field("Results per page (1–500)", "100");
+        page.addView(turboResultStart); page.addView(turboResultCount);
         Button turboFirst = button("TURBO FIRST SCAN", ACCENT);
         Button turboNext = button("NEXT SCAN (EXACT VALUE)", PANEL);
         Button turboGet = button("LOAD FIRST 100 RESULTS", PANEL);
@@ -577,7 +580,7 @@ public class MainActivity extends Activity {
             if(ci>3) throw new IllegalArgumentException("First scan supports Exact, Bigger, Smaller or Between. Other comparisons are for Next Scan.");
             int compare=TURBO_COMPARE_CODES[ci]; byte[] value=encodeTurboCompareValue(type,compare,turboValue.getText().toString().trim());
             long count=scanClient.turboFirstScan(p,start,length,type,compare,value);
-            turboActive=true; turboValueType=type; turboValueLength=value.length;
+            turboActive=true; turboValueType=type; turboValueLength=(type==4||type==5?4:type==6||type==7||type==9?8:type==8?4:type==2||type==3?2:1); turboResultTotal=count;
             return "TurboScan started. Results: "+count+"\\nRange: 0x"+Long.toHexString(start)+" – 0x"+Long.toHexString(start+(long)length);
         },result->turboResult.setText(result));
     }
@@ -587,14 +590,19 @@ public class MainActivity extends Activity {
             if(turboType.getSelectedItemPosition()!=turboValueType) throw new IllegalArgumentException("Value type cannot change during a scan.");
             int compare=TURBO_COMPARE_CODES[turboCompare.getSelectedItemPosition()];
             byte[] value=encodeTurboCompareValue(turboValueType,compare,turboValue.getText().toString().trim());
-            return "Next Scan complete. Remaining results: "+scanClient.turboNextScan(compare,value,turboValueLength);
+            turboResultTotal=scanClient.turboNextScan(compare,value,turboValueLength);
+            return "Next Scan complete. Remaining results: "+turboResultTotal;
         },result->turboResult.setText(result));
     }
     private void turboLoadResults() {
         if(!turboActive || scanClient==null) { toast("Run Turbo First Scan first."); return; }
         runAsync("Loading TurboScan results",()->{
-            List<PS5Client.TurboResult> rows=scanClient.turboGet(0,100,turboValueLength);
-            StringBuilder b=new StringBuilder("First ").append(rows.size()).append(" result(s):\\n");
+            int start=Integer.parseInt(turboResultStart.getText().toString().trim());
+            int count=Integer.parseInt(turboResultCount.getText().toString().trim());
+            if(start<0||count<1||count>500) throw new IllegalArgumentException("Result page must start at 0 or higher and contain 1–500 rows.");
+            if(start>=turboResultTotal) throw new IllegalArgumentException("Page start is beyond the current result count.");
+            List<PS5Client.TurboResult> rows=scanClient.turboGet(start,count,turboValueLength);
+            StringBuilder b=new StringBuilder("Results ").append(start).append("–").append(start+rows.size()-1).append(" of ").append(turboResultTotal).append(":\\n");
             for(PS5Client.TurboResult r:rows) b.append(String.format(Locale.US,"0x%016X  current=%s  previous=%s\\n",r.address,toHex(r.current),toHex(r.previous)));
             return b.toString();
         },result->turboResult.setText(result));
