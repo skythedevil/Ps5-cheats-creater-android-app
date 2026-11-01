@@ -1012,7 +1012,7 @@ public class MainActivity extends Activity {
             auth(); activeTurboPid=pid;activeTurboType=type; socket.setSoTimeout(120000);
             ByteBuffer h=ByteBuffer.allocate(27).order(ByteOrder.LITTLE_ENDIAN);h.putInt(pid).putLong(start).putInt(length).put((byte)type).put((byte)compare).put((byte)1).putInt(value.length).putInt(0x12);
             send(CMD_TURBO_START,h.array());expectSuccess("TurboScan start");out.write(value);out.flush();expectSuccess("TurboScan setup");
-            ByteBuffer seg=ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(1).putLong(start).putInt(length);out.write(seg.array());out.flush();
+            ByteBuffer seg=ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN).putInt(1).putLong(start).putLong(length&0xFFFFFFFFL);out.write(seg.array());out.flush();
             byte[] raw=readBytes(12);ByteBuffer r=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);int stored=r.getInt();long count=r.getLong();
             if(stored==0){if(readLongLE()!=-1L)throw new IOException("Unexpected TurboScan decline response.");expectSuccess("TurboScan decline");throw new IOException("Too many matches for the payload result list. Narrow the range.");}
             expectSuccess("TurboScan completion");socket.setSoTimeout(15000);return count;
