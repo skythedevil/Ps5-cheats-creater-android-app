@@ -173,10 +173,10 @@ public class MainActivity extends Activity {
         addressAutoButton.setOnClickListener(v->{addressAutoRefresh=!addressAutoRefresh;addressAutoButton.setText(addressAutoRefresh?"AUTO REFRESH: ON":"AUTO REFRESH: OFF");addressHandler.removeCallbacks(addressRefreshTick);if(addressAutoRefresh)addressHandler.post(addressRefreshTick);});
         loadAddressEntries();
 
-        section(page, "04  EXACT BYTE SCAN", "Scans a chosen range for an exact byte pattern. Each scan is capped at 16 MiB to keep mobile memory and network use bounded.");
+        section(page, "04  BYTE / AOB SCAN", "Scans a chosen range for exact bytes or wildcard AOB signatures (use ?? for any byte). Each scan is capped at 16 MiB.");
         scanAddress = field("Start address", "0x0");
         scanLength = field("Range size (max 16 MiB)", "1048576");
-        scanBytes = field("Pattern (hex)", "DE AD BE EF");
+        scanBytes = field("Pattern (hex; ?? = wildcard)", "DE AD ?? EF");
         page.addView(scanAddress); page.addView(scanLength); page.addView(scanBytes);
         Button scan = button("SCAN RANGE", PANEL);
         page.addView(scan);
@@ -637,8 +637,12 @@ public class MainActivity extends Activity {
             int p = currentPid();
             long start = resolveAddress(scanAddress.getText().toString().trim(), p);
             int length = Integer.decode(scanLength.getText().toString().trim());
-            byte[] pattern = parseHex(scanBytes.getText().toString());
-            if (pattern.length == 0 || pattern.length > 64) throw new IllegalArgumentException("Pattern must contain 1–64 bytes.");
+            String patternText=scanBytes.getText().toString().trim();
+            String[] tokens=patternText.split("[\\s,]+");
+            if(tokens.length==0||tokens.length>64)throw new IllegalArgumentException("Pattern must contain 1–64 byte tokens.");
+            byte[] pattern=new byte[tokens.length];boolean[] mask=new boolean[tokens.length];
+            for(int k=0;k<tokens.length;k++){String token=tokens[k].trim();if(token.equals("?")||token.equals("??")){mask[k]=false;pattern[k]=0;}else{if(!token.matches("(?i)[0-9a-f]{2}"))throw new IllegalArgumentException("Use two-digit hex bytes or ?? wildcards.");pattern[k]=(byte)Integer.parseInt(token,16);mask[k]=true;}}
+            boolean wildcard=false;for(boolean fixed:mask)if(!fixed){wildcard=true;break;}
             if (length <= 0 || length > SCAN_MAX) throw new IllegalArgumentException("Scan range must be between 1 byte and 16 MiB.");
             List<Long> matches = new ArrayList<>();
             int chunkSize = 64 * 1024;
@@ -653,7 +657,7 @@ public class MainActivity extends Activity {
                 long combinedBase = start + scanned - tail.length;
                 for (int i = 0; i <= combined.length - pattern.length; i++) {
                     boolean same = true;
-                    for (int j = 0; j < pattern.length; j++) if (combined[i+j] != pattern[j]) { same = false; break; }
+                    for (int j = 0; j < pattern.length; j++) if (mask[j] && combined[i+j] != pattern[j]) { same = false; break; }
                     if (same) {
                         long at = combinedBase + i;
                         if (at >= start + scanned - tail.length) matches.add(at);
