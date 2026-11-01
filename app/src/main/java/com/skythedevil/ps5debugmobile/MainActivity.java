@@ -47,6 +47,7 @@ public class MainActivity extends Activity {
     private EditText scanAddress, scanLength, scanBytes;
     private EditText turboValue;
     private Spinner turboType;
+    private Spinner turboCompare;
     private TextView turboResult;
     private PS5Client scanClient;
     private boolean turboActive = false;
@@ -160,6 +161,10 @@ public class MainActivity extends Activity {
         turboType.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, turboTypes));
         turboType.setSelection(4);
         page.addView(turboType);
+        turboCompare = new Spinner(this);
+        String[] compareLabels = {"Exact value", "Bigger than", "Smaller than", "Between low/high", "Increased", "Increased by", "Decreased", "Decreased by", "Changed", "Unchanged"};
+        turboCompare.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, compareLabels));
+        page.addView(turboCompare);
         turboValue = field("Exact value to find", "100"); page.addView(turboValue);
         Button turboFirst = button("TURBO FIRST SCAN", ACCENT);
         Button turboNext = button("NEXT SCAN (EXACT VALUE)", PANEL);
@@ -555,6 +560,12 @@ public class MainActivity extends Activity {
         if(scanClient.turboCaps()==null) throw new IOException("Payload does not advertise TurboScan. Update ps5debug-NG or use Exact Byte Scan.");
         scanClient.auth();
     }
+    private byte[] encodeTurboCompareValue(int type,int compare,String raw) {
+        if(compare==5||compare==7||compare==9||compare==10) return new byte[0];
+        if(compare==4) { String[] pair=raw.split(",",2); if(pair.length!=2) throw new IllegalArgumentException("Between scan needs two comma-separated values: low,high"); byte[] lo=encodeTurboValue(type,pair[0].trim()),hi=encodeTurboValue(type,pair[1].trim()); byte[] both=Arrays.copyOf(lo,lo.length+hi.length);System.arraycopy(hi,0,both,lo.length,hi.length);return both; }
+        return encodeTurboValue(type,raw);
+    }
+    private static final int[] TURBO_COMPARE_CODES={0,2,3,4,5,6,7,8,9,10};
     private void turboFirstScan() {
         if(!connected) { toast("Connect to the PS5 first."); return; }
         runAsync("Starting TurboScan",()->{
@@ -562,8 +573,10 @@ public class MainActivity extends Activity {
             long start=resolveAddress(scanAddress.getText().toString().trim(),p);
             int length=Integer.decode(scanLength.getText().toString().trim());
             if(length<1) throw new IllegalArgumentException("Enter a positive scan range.");
-            int type=turboType.getSelectedItemPosition(); byte[] value=encodeTurboValue(type,turboValue.getText().toString().trim());
-            long count=scanClient.turboFirstScan(p,start,length,type,value);
+            int type=turboType.getSelectedItemPosition(); int ci=turboCompare.getSelectedItemPosition();
+            if(ci>3) throw new IllegalArgumentException("First scan supports Exact, Bigger, Smaller or Between. Other comparisons are for Next Scan.");
+            int compare=TURBO_COMPARE_CODES[ci]; byte[] value=encodeTurboCompareValue(type,compare,turboValue.getText().toString().trim());
+            long count=scanClient.turboFirstScan(p,start,length,type,compare,value);
             turboActive=true; turboValueType=type; turboValueLength=value.length;
             return "TurboScan started. Results: "+count+"\\nRange: 0x"+Long.toHexString(start)+" – 0x"+Long.toHexString(start+(long)length);
         },result->turboResult.setText(result));
@@ -572,8 +585,9 @@ public class MainActivity extends Activity {
         if(!connected || !turboActive || scanClient==null) { toast("Run Turbo First Scan first."); return; }
         runAsync("Refining TurboScan",()->{
             if(turboType.getSelectedItemPosition()!=turboValueType) throw new IllegalArgumentException("Value type cannot change during a scan.");
-            byte[] value=encodeTurboValue(turboValueType,turboValue.getText().toString().trim());
-            return "Next Scan complete. Remaining results: "+scanClient.turboNextExact(value);
+            int compare=TURBO_COMPARE_CODES[turboCompare.getSelectedItemPosition()];
+            byte[] value=encodeTurboCompareValue(turboValueType,compare,turboValue.getText().toString().trim());
+            return "Next Scan complete. Remaining results: "+scanClient.turboNextScan(compare,value,turboValueLength);
         },result->turboResult.setText(result));
     }
     private void turboLoadResults() {
@@ -994,18 +1008,20 @@ public class MainActivity extends Activity {
         }
         private static byte[] authKey(){long mask=0xFFFFFFFFL,s1=200,s2=300,s3=400,s4=500;byte[] o=new byte[256];for(int i=0;i<256;i++){s1=((s1<<18)&0xFFF80000L)^(((s1^(s1<<6))&mask)>>>13);s2=((s2<<2)&0xFFFFFFE0L)^(((s2^(s2<<2))&mask)>>>27);s3=((s3<<7)&0xFFFFF800L)^(((s3^(s3<<13))&mask)>>>21);s4=((s4<<13)&0xFFF00000L)^(((s4^(s4<<3))&mask)>>>12);o[i]=(byte)(s1^s2^s3^s4);}return o;}
         synchronized void auth() throws IOException {if(authenticated)return;ByteBuffer h=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(0xBB40E64D).putInt(2);send(CMD_PROC_AUTH,h.array());expectSuccess("TurboScan auth");int n=readUShortLE();if(n>4096)throw new IOException("Invalid auth challenge.");byte[] ch=readBytes(n),key=authKey();for(int i=0;i<n;i++)ch[i]=(byte)(ch[i]^key[i&255]);out.write(ch);out.flush();expectSuccess("TurboScan auth response");authenticated=true;}
-        synchronized long turboFirstScan(int pid,long start,int length,int type,byte[] value) throws IOException {
+        synchronized long turboFirstScan(int pid,long start,int length,int type,int compare,byte[] value) throws IOException {
             auth(); activeTurboPid=pid;activeTurboType=type; socket.setSoTimeout(120000);
-            ByteBuffer h=ByteBuffer.allocate(27).order(ByteOrder.LITTLE_ENDIAN);h.putInt(pid).putLong(start).putInt(length).put((byte)type).put((byte)0).put((byte)1).putInt(value.length).putInt(0x12);
+            ByteBuffer h=ByteBuffer.allocate(27).order(ByteOrder.LITTLE_ENDIAN);h.putInt(pid).putLong(start).putInt(length).put((byte)type).put((byte)compare).put((byte)1).putInt(value.length).putInt(0x12);
             send(CMD_TURBO_START,h.array());expectSuccess("TurboScan start");out.write(value);out.flush();expectSuccess("TurboScan setup");
             ByteBuffer seg=ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(1).putLong(start).putInt(length);out.write(seg.array());out.flush();
             byte[] raw=readBytes(12);ByteBuffer r=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);int stored=r.getInt();long count=r.getLong();
             if(stored==0){if(readLongLE()!=-1L)throw new IOException("Unexpected TurboScan decline response.");expectSuccess("TurboScan decline");throw new IOException("Too many matches for the payload result list. Narrow the range.");}
             expectSuccess("TurboScan completion");socket.setSoTimeout(15000);return count;
         }
-        synchronized long turboNextExact(byte[] value) throws IOException {
-            auth();socket.setSoTimeout(120000);ByteBuffer h=ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);h.putInt(activeTurboPid).putLong(0L).put((byte)activeTurboType).put((byte)0).putInt(value.length).putInt(0x02);
-            send(CMD_TURBO_COUNT,h.array());expectSuccess("TurboScan next scan");out.write(value);out.flush();
+        synchronized long turboNextScan(int compare,byte[] value,int valueLength) throws IOException {
+            auth();socket.setSoTimeout(120000);boolean needsValue=(compare==0||compare==2||compare==3||compare==4||compare==6||compare==8);
+            int dataLength=needsValue&&value.length>0?value.length:valueLength;
+            ByteBuffer h=ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);h.putInt(activeTurboPid).putLong(0L).put((byte)activeTurboType).put((byte)compare).putInt(dataLength).putInt(0x02);
+            send(CMD_TURBO_COUNT,h.array());expectSuccess("TurboScan next scan");if(needsValue&&value.length>0){out.write(value);out.flush();}
             while(readLongLE()!=-1L){} long count=readLongLE();expectSuccess("TurboScan next scan completion");socket.setSoTimeout(15000);return count;
         }
         synchronized List<TurboResult> turboGet(int start,int count,int valueLength) throws IOException {
