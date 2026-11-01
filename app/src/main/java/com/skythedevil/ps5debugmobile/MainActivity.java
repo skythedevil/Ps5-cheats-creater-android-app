@@ -973,11 +973,13 @@ public class MainActivity extends Activity {
                 long addr = b.getLong(); b.getLong(); b.getLong();
                 int len = b.get() & 255; int kind = b.get() & 255;
                 b.get(); b.get(); b.get(); b.get(); b.getShort();
-                byte[] bytes = readMemoryForDisasm(pid, addr, len);
-                out.add(new DisasmEntry(addr, len, kind, bytes));
+                out.add(new DisasmEntry(addr, len, kind, new byte[0]));
                 if (out.size() >= max) break;
             }
-            return out;
+            // The disassembly stream is fully drained before issuing ordinary read commands.
+            List<DisasmEntry> withBytes = new ArrayList<>();
+            for (DisasmEntry e : out) withBytes.add(new DisasmEntry(e.address, e.length, e.kind, readMemoryForDisasm(pid, e.address, e.length)));
+            return withBytes;
         }
         private byte[] readMemoryForDisasm(int pid, long addr, int len) throws IOException {
             // A disassembly operation cannot interleave another command on this socket.
