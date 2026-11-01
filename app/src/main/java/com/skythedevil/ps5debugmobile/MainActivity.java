@@ -814,13 +814,25 @@ public class MainActivity extends Activity {
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(4);turboRows.addView(row,lp);
             TextView label=text(String.format(Locale.US,"0x%016X\\nCurrent: %s\\nPrevious: %s",item.address,toHex(item.current),toHex(item.previous)),11,TEXT,false);label.setTypeface(Typeface.MONOSPACE);row.addView(label);
             LinearLayout actions=new LinearLayout(this); actions.setOrientation(LinearLayout.HORIZONTAL);
-            Button edit=button("EDIT VALUE (HEX)",PANEL), save=button("SAVE TO ADDRESS TABLE",PANEL);
+            Button refresh=button("READ LIVE",PANEL), edit=button("EDIT VALUE (HEX)",PANEL), save=button("SAVE TO TABLE",PANEL);
+            actions.addView(refresh,new LinearLayout.LayoutParams(0,dp(48),1));
             actions.addView(edit,new LinearLayout.LayoutParams(0,dp(48),1));
             actions.addView(save,new LinearLayout.LayoutParams(0,dp(48),1));
             row.addView(actions);
+            refresh.setOnClickListener(v->refreshTurboResult(item,label,refresh));
             edit.setOnClickListener(v->editTurboResult(item.address,item.current));
             save.setOnClickListener(v->saveTurboResultToAddressTable(item));
         }
+    }
+    private void refreshTurboResult(PS5Client.TurboResult item,TextView label,Button button) {
+        if(!connected||client==null){toast("Connect to the PS5 first.");return;}
+        button.setEnabled(false);
+        runAsync("Reading live scan value",()->client.read(currentPid(),item.address,item.current.length),bytes->{
+            item.current=bytes;
+            label.setText(String.format(Locale.US,"0x%016X\\nCurrent (live): %s\\nPrevious (scan): %s",item.address,toHex(item.current),toHex(item.previous)));
+            button.setEnabled(true);
+            log("Live value refreshed at 0x"+Long.toHexString(item.address).toUpperCase(Locale.US));
+        });
     }
     private void saveTurboResultToAddressTable(PS5Client.TurboResult item) {
         String address=String.format(Locale.US,"0x%016X",item.address);
