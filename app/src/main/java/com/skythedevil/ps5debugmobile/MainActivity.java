@@ -715,7 +715,7 @@ public class MainActivity extends Activity {
                     int first=(int)((8-(cursor&7))&7);ByteBuffer bb=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
                     for(int off=first;off+8<=raw.length;off+=8){
                         long value=bb.getLong(off);if(value==0)continue;
-                        boolean inRange=false;for(MapEntry d:sources)if(Long.compareUnsigned(value,d.start)>=0&&Long.compareUnsigned(value,d.end)<0){inRange=true;break;}
+                        boolean inRange=pointerInRanges(sources,value);
                         if(inRange)nodes.add(new PointerNode(cursor+off,value));
                         if(nodes.size()>=500000)break;
                     }
@@ -757,6 +757,15 @@ public class MainActivity extends Activity {
             if(hits.size()>=500)out.append("\nDisplay cap reached (500 chains).");
             return out.toString();
         },value->{pointerResult.setText(value);log("Pointer scan completed.");});
+    }
+    private static boolean pointerInRanges(List<MapEntry> ranges,long value){
+        int lo=0,hi=ranges.size();
+        while(lo<hi){int mid=(lo+hi)>>>1;MapEntry r=ranges.get(mid);
+            if(Long.compareUnsigned(value,r.start)<0)hi=mid;
+            else if(Long.compareUnsigned(value,r.end)>=0)lo=mid+1;
+            else return true;
+        }
+        return false;
     }
     private static int pointerLowerBound(List<PointerNode> a,long v){int lo=0,hi=a.size();while(lo<hi){int m=(lo+hi)>>>1;if(Long.compareUnsigned(a.get(m).value,v)<0)lo=m+1;else hi=m;}return lo;}
     private static int pointerUpperBound(List<PointerNode> a,long v){int lo=0,hi=a.size();while(lo<hi){int m=(lo+hi)>>>1;if(Long.compareUnsigned(a.get(m).value,v)<=0)lo=m+1;else hi=m;}return lo;}
