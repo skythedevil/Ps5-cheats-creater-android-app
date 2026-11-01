@@ -71,6 +71,8 @@ public class MainActivity extends Activity {
     private EditText mapFilter, disasmAddress, disasmLength, xrefTarget, breakpointIndex, breakpointAddress, watchIndex, watchAddress, threadId;
     private EditText stackRbp, stackRsp, stackDepth;
     private TextView stackResult;
+    private EditText asmAddress,asmSource,hookTarget,hookDetour,hookOriginal,hookLength;
+    private TextView asmResult,hookResult;
     private EditText caveMinSize,caveMaxMiB;
     private TextView caveResult;
     private Spinner processSpinner;
@@ -328,6 +330,27 @@ public class MainActivity extends Activity {
         Button caveScan=button("SCAN EXECUTABLE CODE CAVES",PANEL);page.addView(caveScan);
         caveResult=text("No code-cave scan performed.",11,MUTED,false);caveResult.setTypeface(Typeface.MONOSPACE);page.addView(caveResult);
         caveScan.setOnClickListener(v->scanCodeCaves());
+
+
+        section(page, "05C  X64 ASSEMBLER + HOOK BUILDER", "Offline x86-64 helper. Assemble the supported instruction subset or generate a 14-byte absolute JMP patch and trampoline. Review instruction boundaries before using a hook.");
+        asmAddress=field("Assembly base address","0x0");
+        asmSource=field("Assembly instructions (one per line; subset listed below)","nop\\nmov rax, 0x1122334455667788\\nret");
+        asmSource.setSingleLine(false);asmSource.setMinLines(4);asmSource.setGravity(Gravity.TOP|Gravity.START);
+        page.addView(asmAddress);page.addView(asmSource);
+        Button asmBuild=button("ASSEMBLE TO HEX",PANEL);page.addView(asmBuild);
+        asmResult=text("Supported: nop, ret, int3, push/pop 64-bit registers, mov r64, imm64, jmp/call rel32, db hex bytes.",11,MUTED,false);
+        asmResult.setTypeface(Typeface.MONOSPACE);page.addView(asmResult);
+        hookTarget=field("Hook site address","0x0");
+        hookDetour=field("Detour address","0x0");
+        hookLength=field("Stolen whole-instruction length (14–64 bytes)","14");
+        hookOriginal=field("Original bytes at hook site (hex)","");
+        hookOriginal.setSingleLine(false);hookOriginal.setMinLines(2);hookOriginal.setGravity(Gravity.TOP|Gravity.START);
+        page.addView(hookTarget);page.addView(hookDetour);page.addView(hookLength);page.addView(hookOriginal);
+        Button hookBuild=button("GENERATE HOOK PATCH + TRAMPOLINE",PANEL);page.addView(hookBuild);
+        hookResult=text("No hook generated. This helper does not write memory.",11,MUTED,false);
+        hookResult.setTypeface(Typeface.MONOSPACE);page.addView(hookResult);
+        asmBuild.setOnClickListener(v->assembleMiniUi());
+        hookBuild.setOnClickListener(v->buildAbsoluteHook());
 
         section(page, "06  DEBUGGER", "Attach/detach, software breakpoints, hardware watchpoints, thread listing and register inspection. Full async stepping/event UI is still pending.");
         breakpointIndex = field("Breakpoint slot (0–29)", "0");
@@ -683,6 +706,78 @@ public class MainActivity extends Activity {
     }
 
 
+
+
+    private void assembleMiniUi(){
+        try{
+            long base=parseAddress(asmAddress.getText().toString());
+            byte[] code=assembleMini(asmSource.getText().toString(),base);
+            asmResult.setText("Base: 0x"+Long.toHexString(base).toUpperCase(Locale.US)+"\\nLength: "+code.length+" bytes\\nHEX: "+toHex(code));
+        }catch(Exception e){asmResult.setText("Assembly error: "+e.getMessage());}
+    }
+    private static byte[] assembleMini(String source,long base)throws IOException{
+        ByteArrayOutputStream out=new ByteArrayOutputStream();
+        String[] lines=source.replace("\\r","").split("\\n");
+        for(String original:lines){
+            String line=original.split(";",2)[0].trim();if(line.isEmpty())continue;
+            String low=line.toLowerCase(Locale.US);
+            if(low.equals("nop")){out.write(0x90);continue;}
+            if(low.equals("ret")||low.equals("retq")){out.write(0xC3);continue;}
+            if(low.equals("int3")){out.write(0xCC);continue;}
+            if(low.startsWith("db ")){out.write(parseHex(line.substring(3)));continue;}
+            String[] p=line.split("\\s+",2);String op=p[0].toLowerCase(Locale.US);
+            if((op.equals("push")||op.equals("pop"))&&p.length==2){
+                int reg=x64Register(p[1].trim());if(reg<0)throw new IOException("Unsupported register: "+p[1]);
+                if(reg<8)out.write((op.equals("push")?0x50:0x58)+reg);
+                else{out.write(0x41);out.write((op.equals("push")?0x50:0x58)+(reg-8));}
+                continue;
+            }
+            if(op.equals("mov")&&p.length==2){
+                String[] args=p[1].split(",",2);if(args.length!=2)throw new IOException("mov syntax: mov rax, 0x1234");
+                int reg=x64Register(args[0].trim());if(reg<0)throw new IOException("Only 64-bit registers are supported for mov.");
+                long imm=parseAddress(args[1].trim());
+                out.write(reg>=8?0x49:0x48);out.write(0xB8+(reg&7));
+                for(int i=0;i<8;i++)out.write((int)(imm>>>(i*8))&255);
+                continue;
+            }
+            if((op.equals("jmp")||op.equals("call"))&&p.length==2){
+                long target=parseAddress(p[1].trim());long ip=base+out.size();
+                long rel=target-(ip+5);
+                if(rel<Integer.MIN_VALUE||rel>Integer.MAX_VALUE)throw new IOException("Relative branch target is out of 32-bit range; use mov rax, target then jmp rax (not yet supported).");
+                out.write(op.equals("jmp")?0xE9:0xE8);
+                for(int i=0;i<4;i++)out.write((int)(rel>>>(i*8))&255);
+                continue;
+            }
+            throw new IOException("Unsupported instruction: "+line);
+        }
+        if(out.size()==0)throw new IOException("No instructions assembled.");
+        return out.toByteArray();
+    }
+    private static int x64Register(String name){
+        String[] regs={"rax","rcx","rdx","rbx","rsp","rbp","rsi","rdi","r8","r9","r10","r11","r12","r13","r14","r15"};
+        for(int i=0;i<regs.length;i++)if(regs[i].equalsIgnoreCase(name))return i;return -1;
+    }
+    private void buildAbsoluteHook(){
+        try{
+            long site=parseAddress(hookTarget.getText().toString()),detour=parseAddress(hookDetour.getText().toString());
+            int length=Integer.parseInt(hookLength.getText().toString().trim());
+            byte[] original=parseHex(hookOriginal.getText().toString());
+            if(length<14||length>64)throw new IllegalArgumentException("Stolen length must be 14–64 bytes.");
+            if(original.length!=length)throw new IllegalArgumentException("Original byte count must exactly match stolen length ("+length+").");
+            byte[] patch=absoluteJump(detour);if(patch.length>length)throw new IllegalArgumentException("Patch does not fit stolen length.");
+            byte[] padded=Arrays.copyOf(patch,length);Arrays.fill(padded,patch.length,length,(byte)0x90);
+            byte[] trampoline=new byte[length+14];System.arraycopy(original,0,trampoline,0,length);
+            byte[] back=absoluteJump(site+length);System.arraycopy(back,0,trampoline,length,back.length);
+            hookResult.setText("HOOK SITE: 0x"+Long.toHexString(site).toUpperCase(Locale.US)+"\\nDETOUR: 0x"+Long.toHexString(detour).toUpperCase(Locale.US)
+                +"\\nStolen bytes: "+length+"\\n\\nPATCH (write at hook site):\\n"+toHex(padded)
+                +"\\n\\nTRAMPOLINE (place in executable cave):\\n"+toHex(trampoline)
+                +"\\n\\nWARNING: supplied original bytes must end on whole instruction boundaries. Allocate executable memory and validate the trampoline before enabling.");
+        }catch(Exception e){hookResult.setText("Hook builder error: "+e.getMessage());}
+    }
+    private static byte[] absoluteJump(long target){
+        ByteBuffer b=ByteBuffer.allocate(14).order(ByteOrder.LITTLE_ENDIAN);
+        b.put((byte)0xFF).put((byte)0x25).putInt(0).putLong(target);return b.array();
+    }
 
     private static final class PointerNode { final long slot,value; PointerNode(long s,long v){slot=s;value=v;} }
     private static final class PointerPath { final long address; final List<Long> offsets; final Set<Long> visited; PointerPath(long a,List<Long> o,Set<Long> v){address=a;offsets=o;visited=v;} }
