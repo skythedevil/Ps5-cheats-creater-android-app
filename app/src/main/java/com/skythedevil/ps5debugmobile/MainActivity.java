@@ -342,7 +342,7 @@ public class MainActivity extends Activity {
         page.addView(asmAddress);page.addView(asmSource);
         Button asmBuild=button("ASSEMBLE TO HEX",PANEL);page.addView(asmBuild);
         asmResult=text("Supported: nop, ret, int3, push/pop 64-bit registers, mov r64, imm64, jmp/call rel32, db hex bytes.",11,MUTED,false);
-        asmResult.setTypeface(Typeface.MONOSPACE);page.addView(asmResult);
+        asmResult.setTypeface(Typeface.MONOSPACE);asmResult.setTextIsSelectable(true);page.addView(asmResult);
         hookTarget=field("Hook site address","0x0");
         hookDetour=field("Detour address","0x0");
         hookLength=field("Stolen whole-instruction length (14–64 bytes)","14");
@@ -351,7 +351,7 @@ public class MainActivity extends Activity {
         page.addView(hookTarget);page.addView(hookDetour);page.addView(hookLength);page.addView(hookOriginal);
         Button hookBuild=button("GENERATE HOOK PATCH + TRAMPOLINE",PANEL);page.addView(hookBuild);
         hookResult=text("No hook generated. This helper does not write memory.",11,MUTED,false);
-        hookResult.setTypeface(Typeface.MONOSPACE);page.addView(hookResult);
+        hookResult.setTypeface(Typeface.MONOSPACE);hookResult.setTextIsSelectable(true);page.addView(hookResult);
         asmBuild.setOnClickListener(v->assembleMiniUi());
         hookBuild.setOnClickListener(v->buildAbsoluteHook());
 
@@ -1402,14 +1402,6 @@ public class MainActivity extends Activity {
         debugEventListening=false;
         if(debugEventServer!=null){try{debugEventServer.close();}catch(Exception ignored){}debugEventServer=null;}
     }
-    @Override protected void onDestroy(){
-        stopDebugEventListener();
-        try{if(client!=null)client.close();}catch(Exception ignored){}
-        try{if(scanClient!=null)scanClient.close();}catch(Exception ignored){}
-        worker.shutdownNow();cancelWorker.shutdownNow();debugEventWorker.shutdownNow();
-        super.onDestroy();
-    }
-
     private void debugAttach(boolean attach) {
         if(attach)startDebugEventListener(); else stopDebugEventListener();
         if (!connected) { toast("Connect to the PS5 first."); return; }
@@ -1728,9 +1720,11 @@ public class MainActivity extends Activity {
     private int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
 
     @Override protected void onDestroy() {
+        stopDebugEventListener();
         super.onDestroy();
         worker.shutdownNow();
         cancelWorker.shutdownNow();
+        debugEventWorker.shutdownNow();
         if (client != null) client.close();
         if (scanClient != null) scanClient.close();
     }
