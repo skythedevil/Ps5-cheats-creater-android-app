@@ -46,6 +46,9 @@ public class MainActivity extends Activity {
 
     private EditText host, port, pid, readAddress, readLength, writeAddress, writeBytes;
     private EditText scanAddress, scanLength, scanBytes;
+    private EditText pointerTarget,pointerOffset,pointerDepth,pointerBudget;
+    private TextView pointerResult;
+    private volatile boolean pointerCancel=false;
     private EditText hexEditorInput;
     private TextView hexEditorInfo;
     private byte[] hexEditorOriginal = new byte[0];
@@ -194,6 +197,21 @@ public class MainActivity extends Activity {
         hexNext.setOnClickListener(v -> moveHexEditorPage(1));
         hexWrite.setOnClickListener(v -> writeHexEditorPage(false));
         hexRestore.setOnClickListener(v -> writeHexEditorPage(true));
+
+        section(page, "03C  POINTER SCANNER", "Build a bounded pointer map from writable, non-executable regions, then search multi-level chains back to module memory.");
+        pointerTarget=field("Target address", "0x0");
+        pointerOffset=field("Maximum offset per level (hex or decimal)", "4096");
+        pointerDepth=field("Maximum depth (1–5)", "3");
+        pointerBudget=field("Memory scan budget (MiB; 1–256)", "64");
+        page.addView(pointerTarget); page.addView(pointerOffset); page.addView(pointerDepth); page.addView(pointerBudget);
+        LinearLayout pointerActions=new LinearLayout(this); pointerActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button pointerScan=button("BUILD MAP + FIND CHAINS",ACCENT), pointerCancelButton=button("CANCEL",PANEL);
+        pointerActions.addView(pointerScan,new LinearLayout.LayoutParams(0,dp(48),1));
+        pointerActions.addView(pointerCancelButton,new LinearLayout.LayoutParams(0,dp(48),1)); page.addView(pointerActions);
+        pointerResult=text("No pointer scan performed. Writable non-executable memory only; bounded by the MiB budget.",11,MUTED,false);
+        pointerResult.setTypeface(Typeface.MONOSPACE); page.addView(pointerResult);
+        pointerScan.setOnClickListener(v->startPointerScan());
+        pointerCancelButton.setOnClickListener(v->{pointerCancel=true;pointerResult.setText("Cancellation requested…");});
 
         writeAddress = field("Write address", "0x0");
         writeBytes = field("Bytes to write (hex)", "90 90 90");
@@ -664,6 +682,84 @@ public class MainActivity extends Activity {
         });
     }
 
+
+
+    private static final class PointerNode { final long slot,value; PointerNode(long s,long v){slot=s;value=v;} }
+    private static final class PointerPath { final long address; final List<Long> offsets; PointerPath(long a,List<Long> o){address=a;offsets=o;} }
+    private static final class PointerHit { final String module; final long baseOffset; final List<Long> offsets; PointerHit(String m,long b,List<Long> o){module=m;baseOffset=b;offsets=o;} }
+    private void startPointerScan(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        final long target,maxOff; final int depth,budget;
+        try{
+            target=resolveAddress(pointerTarget.getText().toString().trim(),currentPid());
+            String raw=pointerOffset.getText().toString().trim();
+            maxOff=raw.startsWith("0x")||raw.startsWith("0X")?Long.parseUnsignedLong(raw.substring(2),16):Long.parseLong(raw);
+            depth=Integer.parseInt(pointerDepth.getText().toString().trim());
+            budget=Integer.parseInt(pointerBudget.getText().toString().trim());
+            if(maxOff<0||depth<1||depth>5||budget<1||budget>256)throw new IllegalArgumentException("Offset must be non-negative, depth 1–5 and budget 1–256 MiB.");
+        }catch(Exception e){toast("Pointer scan settings: "+e.getMessage());return;}
+        pointerCancel=false;pointerResult.setText("Reading process maps…");
+        runAsync("Building pointer map and searching chains",()->{
+            int p=currentPid(); List<MapEntry> regions=client.maps(p), sources=new ArrayList<>();
+            long remaining=(long)budget*1024*1024,scanned=0;
+            for(MapEntry m:regions)if((m.prot&3)==3&&(m.prot&4)==0&&m.end>m.start&&remaining>0){
+                long size=Math.min(m.end-m.start,remaining);MapEntry x=new MapEntry();x.name=m.name;x.start=m.start;x.end=m.start+size;x.prot=m.prot;sources.add(x);remaining-=size;
+            }
+            if(sources.isEmpty())throw new IOException("No readable writable non-executable regions found.");
+            List<PointerNode> nodes=new ArrayList<>();
+            for(MapEntry m:sources){
+                long cursor=m.start;
+                while(cursor<m.end){
+                    if(pointerCancel)throw new IOException("Pointer scan cancelled.");
+                    int n=(int)Math.min(65536,m.end-cursor);byte[] raw=client.read(p,cursor,n);
+                    int first=(int)((8-(cursor&7))&7);ByteBuffer bb=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+                    for(int off=first;off+8<=raw.length;off+=8){
+                        long value=bb.getLong(off);if(value==0)continue;
+                        boolean inRange=false;for(MapEntry d:sources)if(Long.compareUnsigned(value,d.start)>=0&&Long.compareUnsigned(value,d.end)<0){inRange=true;break;}
+                        if(inRange)nodes.add(new PointerNode(cursor+off,value));
+                        if(nodes.size()>=500000)break;
+                    }
+                    scanned+=raw.length;cursor+=raw.length;if(nodes.size()>=500000)break;
+                }
+                if(nodes.size()>=500000)break;
+            }
+            if(nodes.isEmpty())return "Pointer map contains no pointers into scanned writable regions. Scanned "+(scanned/1048576)+" MiB.";
+            Collections.sort(nodes,(a,b)->Long.compareUnsigned(a.value,b.value));
+            List<PointerPath> frontier=new ArrayList<>();frontier.add(new PointerPath(target,new ArrayList<>()));
+            Set<Long> visited=new HashSet<>();visited.add(target);List<PointerHit> hits=new ArrayList<>();
+            for(int level=1;level<=depth&&!frontier.isEmpty()&&hits.size()<500;level++){
+                List<PointerPath> next=new ArrayList<>();
+                for(PointerPath path:frontier){
+                    if(pointerCancel)throw new IOException("Pointer scan cancelled.");
+                    int lo=pointerLowerBound(nodes,path.address-maxOff),hi=pointerUpperBound(nodes,path.address);
+                    for(int k=lo;k<hi;k++){
+                        PointerNode node=nodes.get(k);if(!visited.add(node.slot))continue;
+                        List<Long> offsets=new ArrayList<>(path.offsets);offsets.add(path.address-node.value);
+                        MapEntry base=null;
+                        for(MapEntry m:regions){
+                            String nm=m.name==null?"":m.name.toLowerCase(Locale.US);
+                            boolean module=nm.equals("executable")||nm.matches(".*\\.(bin|elf|self|prx|sprx|so)$");
+                            if(module&&Long.compareUnsigned(node.slot,m.start)>=0&&Long.compareUnsigned(node.slot,m.end)<0){base=m;break;}
+                        }
+                        if(base!=null){
+                            long moduleBase=base.start;for(MapEntry m:regions)if(base.name.equals(m.name)&&Long.compareUnsigned(m.start,moduleBase)<0)moduleBase=m.start;
+                            Collections.reverse(offsets);hits.add(new PointerHit(base.name,node.slot-moduleBase,new ArrayList<>(offsets)));
+                        }else if(level<depth&&next.size()<100000)next.add(new PointerPath(node.slot,offsets));
+                        if(hits.size()>=500)break;
+                    }
+                }
+                frontier=next;
+            }
+            StringBuilder out=new StringBuilder("Pointer candidates: ").append(nodes.size()).append("\nScanned: ").append(scanned/1048576).append(" MiB\nTarget: 0x").append(Long.toHexString(target).toUpperCase(Locale.US)).append("\nChains: ").append(hits.size()).append("\n\n");
+            for(int i=0;i<hits.size();i++){PointerHit h=hits.get(i);out.append(i+1).append(". ").append(h.module).append("+0x").append(Long.toHexString(h.baseOffset).toUpperCase(Locale.US));for(long off:h.offsets)out.append(" -> 0x").append(Long.toHexString(off).toUpperCase(Locale.US));out.append("\n");}
+            if(hits.isEmpty())out.append("No module-rooted chains found. Increase offset, depth or scan budget.");
+            if(nodes.size()>=500000)out.append("\nCandidate cap reached (500,000); results may be incomplete.");
+            if(hits.size()>=500)out.append("\nDisplay cap reached (500 chains).");
+            return out.toString();
+        },value->{pointerResult.setText(value);log("Pointer scan completed.");});
+    }
+    private static int pointerLowerBound(List<PointerNode> a,long v){int lo=0,hi=a.size();while(lo<hi){int m=(lo+hi)>>>1;if(Long.compareUnsigned(a.get(m).value,v)<0)lo=m+1;else hi=m;}return lo;}
+    private static int pointerUpperBound(List<PointerNode> a,long v){int lo=0,hi=a.size();while(lo<hi){int m=(lo+hi)>>>1;if(Long.compareUnsigned(a.get(m).value,v)<=0)lo=m+1;else hi=m;}return lo;}
 
     private static final class AddressEntry {
         String name, address, bytes; int type; boolean frozen;
