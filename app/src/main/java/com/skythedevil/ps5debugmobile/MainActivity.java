@@ -993,7 +993,6 @@ public class MainActivity extends Activity {
             finally{if(isConnected())socket.setSoTimeout(15000);}
         }
         private static byte[] authKey(){long mask=0xFFFFFFFFL,s1=200,s2=300,s3=400,s4=500;byte[] o=new byte[256];for(int i=0;i<256;i++){s1=((s1<<18)&0xFFF80000L)^(((s1^(s1<<6))&mask)>>>13);s2=((s2<<2)&0xFFFFFFE0L)^(((s2^(s2<<2))&mask)>>>27);s3=((s3<<7)&0xFFFFF800L)^(((s3^(s3<<13))&mask)>>>21);s4=((s4<<13)&0xFFF00000L)^(((s4^(s4<<3))&mask)>>>12);o[i]=(byte)(s1^s2^s3^s4);}return o;}
-        private int readUShortLE() throws IOException {byte[] b=readBytes(2);return(b[0]&255)|((b[1]&255)<<8);}
         synchronized void auth() throws IOException {if(authenticated)return;ByteBuffer h=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(0xBB40E64D).putInt(2);send(CMD_PROC_AUTH,h.array());expectSuccess("TurboScan auth");int n=readUShortLE();if(n>4096)throw new IOException("Invalid auth challenge.");byte[] ch=readBytes(n),key=authKey();for(int i=0;i<n;i++)ch[i]=(byte)(ch[i]^key[i&255]);out.write(ch);out.flush();expectSuccess("TurboScan auth response");authenticated=true;}
         synchronized long turboFirstScan(int pid,long start,int length,int type,byte[] value) throws IOException {
             auth(); activeTurboPid=pid;activeTurboType=type; socket.setSoTimeout(120000);
