@@ -70,7 +70,10 @@ public class MainActivity extends Activity {
     private TextView connectionStatus, processInfo, memoryResult, scanResult, cheatStatus, mapResult, debugResult, disasmResult;
     private EditText mapFilter, disasmAddress, disasmLength, xrefTarget, breakpointIndex, breakpointAddress, watchIndex, watchAddress, threadId;
     private EditText stackRbp, stackRsp, stackDepth;
-    private TextView stackResult;
+    private TextView stackResult,debugEventResult;
+    private volatile boolean debugEventListening=false;
+    private ServerSocket debugEventServer;
+    private final ExecutorService debugEventWorker=Executors.newSingleThreadExecutor();
     private EditText asmAddress,asmSource,hookTarget,hookDetour,hookOriginal,hookLength;
     private TextView asmResult,hookResult;
     private EditText caveMinSize,caveMaxMiB;
@@ -375,6 +378,10 @@ public class MainActivity extends Activity {
         Button regs = button("READ GENERAL REGISTERS", PANEL);
         Button step = button("SINGLE STEP PROCESS", PANEL);
         page.addView(attach); page.addView(detach); page.addView(threads); page.addView(threadId); page.addView(regs); page.addView(step);
+        section(page, "06A  LIVE DEBUG EVENTS", "Listen on phone TCP port 755 before attaching. The payload connects back to this device with breakpoint, watchpoint and single-step register snapshots.");
+        Button eventListen=button("START / RESTART EVENT LISTENER (TCP 755)",PANEL);page.addView(eventListen);
+        debugEventResult=text("Listener stopped. Start it before attaching the debugger.",11,MUTED,false);debugEventResult.setTypeface(Typeface.MONOSPACE);page.addView(debugEventResult);
+        eventListen.setOnClickListener(v->startDebugEventListener());
         section(page, "06B  CALL STACK", "Walk the frame-pointer chain using the PS5 payload. Leave RBP/RSP blank to use the selected thread's live registers.");
         stackRbp=field("RBP (optional; auto from registers)","");
         stackRsp=field("RSP (optional; auto from registers)","");
@@ -1357,7 +1364,54 @@ public class MainActivity extends Activity {
         },caveResult::setText);
     }
 
+
+    private void startDebugEventListener(){
+        try{
+            stopDebugEventListener();
+            ServerSocket server=new ServerSocket();server.setReuseAddress(true);
+            server.bind(new InetSocketAddress(755));server.setSoTimeout(1000);
+            debugEventServer=server;debugEventListening=true;
+            debugEventResult.setText("Listening on TCP 755. Attach the debugger now; phone and console must be mutually reachable.");
+            debugEventWorker.execute(()->{
+                while(debugEventListening){
+                    try{
+                        Socket peer=server.accept();peer.setSoTimeout(5000);
+                        try{
+                            DataInputStream input=new DataInputStream(new BufferedInputStream(peer.getInputStream()));
+                            byte[] packet=new byte[1184];input.readFully(packet);
+                            ByteBuffer b=ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN);
+                            long lwp=Integer.toUnsignedLong(b.getInt()),status=Integer.toUnsignedLong(b.getInt());
+                            String name=new String(packet,8,40,StandardCharsets.UTF_8).replace(String.valueOf((char)0),"").trim();
+                            int regOff=48;
+                            long rbp=ByteBuffer.wrap(packet,regOff+80,8).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                            long rsp=ByteBuffer.wrap(packet,regOff+112,8).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                            long rip=ByteBuffer.wrap(packet,regOff+120,8).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                            String event="DEBUG EVENT RECEIVED\\nThread/LWP: "+lwp+" ("+name+")\\nWait status: 0x"+Long.toHexString(status).toUpperCase(Locale.US)
+                                +"\\nRIP: 0x"+String.format(Locale.US,"%016X",rip)+"\\nRBP: 0x"+String.format(Locale.US,"%016X",rbp)+"\\nRSP: 0x"+String.format(Locale.US,"%016X",rsp);
+                            runOnUiThread(()->{if(debugEventResult!=null)debugEventResult.setText(event);if(threadId!=null)threadId.setText(String.valueOf(lwp));});
+                        }catch(Exception e){runOnUiThread(()->debugEventResult.setText("Debug event packet error: "+e.getMessage()));}
+                        finally{try{peer.close();}catch(Exception ignored){}}
+                    }catch(SocketTimeoutException ignored){}
+                    catch(SocketException e){if(debugEventListening)runOnUiThread(()->debugEventResult.setText("Event listener socket error: "+e.getMessage()));break;}
+                    catch(Exception e){if(debugEventListening)runOnUiThread(()->debugEventResult.setText("Event listener error: "+e.getMessage()));}
+                }
+            });
+        }catch(Exception e){debugEventListening=false;debugEventResult.setText("Could not bind TCP 755: "+e.getMessage());}
+    }
+    private void stopDebugEventListener(){
+        debugEventListening=false;
+        if(debugEventServer!=null){try{debugEventServer.close();}catch(Exception ignored){}debugEventServer=null;}
+    }
+    @Override protected void onDestroy(){
+        stopDebugEventListener();
+        try{if(client!=null)client.close();}catch(Exception ignored){}
+        try{if(scanClient!=null)scanClient.close();}catch(Exception ignored){}
+        worker.shutdownNow();cancelWorker.shutdownNow();debugEventWorker.shutdownNow();
+        super.onDestroy();
+    }
+
     private void debugAttach(boolean attach) {
+        if(attach)startDebugEventListener(); else stopDebugEventListener();
         if (!connected) { toast("Connect to the PS5 first."); return; }
         runAsync(attach ? "Attaching debugger" : "Detaching debugger", () -> {
             client.debugAttach(currentPid(), attach);
