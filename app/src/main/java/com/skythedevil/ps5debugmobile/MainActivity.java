@@ -64,6 +64,7 @@ public class MainActivity extends Activity {
     private LinearLayout cheatList;
     private Button connectButton;
     private EditText addressEntryName, addressEntryAddress, addressEntryBytes;
+    private Spinner addressEntryType;
     private LinearLayout addressRows;
     private final List<AddressEntry> addressEntries = new ArrayList<>();
     private final Handler addressHandler = new Handler(Looper.getMainLooper());
@@ -534,14 +535,14 @@ public class MainActivity extends Activity {
         addressEntries.clear();
         try {
             JSONArray arr=new JSONArray(getSharedPreferences("address_table",MODE_PRIVATE).getString("entries","[]"));
-            for(int i=0;i<arr.length();i++){JSONObject o=arr.getJSONObject(i);addressEntries.add(new AddressEntry(o.optString("name","Entry"),o.optString("address","0x0"),o.optString("bytes","00"),o.optBoolean("frozen",false)));}
+            for(int i=0;i<arr.length();i++){JSONObject o=arr.getJSONObject(i);addressEntries.add(new AddressEntry(o.optString("name","Entry"),o.optString("address","0x0"),o.optString("bytes","00"),o.optInt("type",0),o.optBoolean("frozen",false)));}
         } catch(Exception e){log("Saved address table could not be loaded: "+e.getMessage());}
         renderAddressEntries();
         if(hasFrozenAddresses()){addressHandler.removeCallbacks(addressFreezeTick);addressHandler.post(addressFreezeTick);}
     }
     private void saveAddressEntries() {
         JSONArray arr=new JSONArray();
-        for(AddressEntry e:addressEntries){JSONObject o=new JSONObject();try{o.put("name",e.name);o.put("address",e.address);o.put("bytes",e.bytes);o.put("frozen",e.frozen);}catch(JSONException ignored){}arr.put(o);}
+        for(AddressEntry e:addressEntries){JSONObject o=new JSONObject();try{o.put("name",e.name);o.put("address",e.address);o.put("bytes",e.bytes);o.put("type",e.type);o.put("frozen",e.frozen);}catch(JSONException ignored){}arr.put(o);}
         getSharedPreferences("address_table",MODE_PRIVATE).edit().putString("entries",arr.toString()).apply();
     }
     private void addAddressEntry() {
@@ -576,8 +577,28 @@ public class MainActivity extends Activity {
     }
     private void editAddressEntry(int index) {
         AddressEntry e=addressEntries.get(index);LinearLayout box=new LinearLayout(this);box.setPadding(dp(12),0,dp(12),0);box.setOrientation(LinearLayout.VERTICAL);
-        EditText name=field("Name",e.name),addr=field("Address",e.address),bytes=field("Value bytes (hex)",e.bytes);box.addView(name);box.addView(addr);box.addView(bytes);
-        new android.app.AlertDialog.Builder(this).setTitle("Edit address entry").setView(box).setNegativeButton("Cancel",null).setPositiveButton("SAVE",(d,w)->{try{parseHex(bytes.getText().toString());e.name=name.getText().toString().trim();e.address=addr.getText().toString().trim();e.bytes=toHex(parseHex(bytes.getText().toString()));saveAddressEntries();renderAddressEntries();}catch(Exception ex){toast(ex.getMessage());}}).show();
+        EditText name=field("Name",e.name),addr=field("Address",e.address),bytes=field("Value",decodeAddressValue(e.type,parseHex(e.bytes))); Spinner type=new Spinner(this);String[] types={"Hex bytes","Byte (unsigned)","Byte (signed)","2 bytes (unsigned)","2 bytes (signed)","4 bytes (unsigned)","4 bytes (signed)","8 bytes (unsigned)","8 bytes (signed)","Float","Double"};type.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,types));type.setSelection(e.type);box.addView(name);box.addView(addr);box.addView(type);box.addView(bytes);
+        new android.app.AlertDialog.Builder(this).setTitle("Edit address entry").setView(box).setNegativeButton("Cancel",null).setPositiveButton("SAVE",(d,w)->{try{int t=type.getSelectedItemPosition();byte[] encoded=encodeAddressValue(t,bytes.getText().toString().trim());e.name=name.getText().toString().trim();e.address=addr.getText().toString().trim();e.type=t;e.bytes=toHex(encoded);saveAddressEntries();renderAddressEntries();}catch(Exception ex){toast(ex.getMessage());}}).show();
+    }
+    private String addressTypeName(int t){String[] n={"HEX","U8","S8","U16","S16","U32","S32","U64","S64","FLOAT","DOUBLE"};return t>=0&&t<n.length?n[t]:"HEX";}
+    private byte[] encodeAddressValue(int t,String raw){
+        if(t==0)return parseHex(raw);
+        ByteBuffer b;
+        switch(t){
+            case 1:case 2:return new byte[]{(byte)Long.decode(raw).longValue()};
+            case 3:case 4:b=ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN);b.putShort((short)Long.decode(raw).longValue());return b.array();
+            case 5:case 6:b=ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);b.putInt((int)Long.decode(raw).longValue());return b.array();
+            case 7:case 8:b=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);b.putLong(Long.decode(raw));return b.array();
+            case 9:b=ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);b.putFloat(Float.parseFloat(raw));return b.array();
+            case 10:b=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);b.putDouble(Double.parseDouble(raw));return b.array();
+            default:throw new IllegalArgumentException("Unsupported address value type.");
+        }
+    }
+    private String decodeAddressValue(int t,byte[] raw){
+        if(t==0)return toHex(raw);
+        if(raw.length!=(t==1||t==2?1:t==3||t==4?2:t==5||t==6||t==9?4:8))return "Invalid byte length";
+        ByteBuffer b=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+        switch(t){case 1:return Long.toString(raw[0]&255);case 2:return Byte.toString(raw[0]);case 3:return Integer.toString(b.getShort()&65535);case 4:return Short.toString(b.getShort());case 5:return Long.toString(b.getInt()&0xffffffffL);case 6:return Integer.toString(b.getInt());case 7:return Long.toUnsignedString(b.getLong());case 8:return Long.toString(b.getLong());case 9:return Float.toString(b.getFloat());case 10:return Double.toString(b.getDouble());default:return toHex(raw);}
     }
     private void refreshAddressEntries() {
         if(!connected){toast("Connect to the PS5 first.");return;}
