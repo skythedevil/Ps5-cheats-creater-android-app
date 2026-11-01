@@ -73,6 +73,7 @@ public class MainActivity extends Activity {
     private Spinner addressEntryType;
     private LinearLayout addressRows;
     private boolean addressAutoRefresh=false, addressRefreshBusy=false;
+    private volatile boolean freezeWriteBusy=false;
     private Button addressAutoButton;
     private final Runnable addressRefreshTick=new Runnable(){@Override public void run(){if(addressAutoRefresh){refreshAddressEntriesQuietly();addressHandler.postDelayed(this,2000);}}};
     private final List<AddressEntry> addressEntries = new ArrayList<>();
@@ -175,6 +176,13 @@ public class MainActivity extends Activity {
         addAddress.setOnClickListener(v->addAddressEntry());
         refreshAddresses.setOnClickListener(v->refreshAddressEntries());
         addressAutoButton.setOnClickListener(v->{addressAutoRefresh=!addressAutoRefresh;addressAutoButton.setText(addressAutoRefresh?"AUTO REFRESH: ON":"AUTO REFRESH: OFF");addressHandler.removeCallbacks(addressRefreshTick);if(addressAutoRefresh)addressHandler.post(addressRefreshTick);});
+        LinearLayout freezeBulkRow=new LinearLayout(this);freezeBulkRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button freezeAll=button("FREEZE ALL",PANEL),unfreezeAll=button("UNFREEZE ALL",PANEL);
+        freezeBulkRow.addView(freezeAll,new LinearLayout.LayoutParams(0,dp(46),1));
+        freezeBulkRow.addView(unfreezeAll,new LinearLayout.LayoutParams(0,dp(46),1));
+        page.addView(freezeBulkRow);
+        freezeAll.setOnClickListener(v->setAllAddressFrozen(true));
+        unfreezeAll.setOnClickListener(v->setAllAddressFrozen(false));
         loadAddressEntries();
 
         section(page, "04  BYTE / AOB SCAN", "Scans a chosen range for exact bytes or wildcard AOB signatures (use ?? for any byte). Each scan is capped at 16 MiB.");
@@ -497,6 +505,7 @@ public class MainActivity extends Activity {
             connectionStatus.setTextColor(GREEN);
             connectButton.setText("DISCONNECT");
             log(result);
+            if(hasFrozenAddresses()){addressHandler.removeCallbacks(addressFreezeTick);addressHandler.post(addressFreezeTick);}
             refreshProcesses();
         });
     }
@@ -675,11 +684,45 @@ public class MainActivity extends Activity {
         worker.execute(()->{try{for(AddressEntry e:addressEntries){long a=resolveAddress(e.address,currentPid());e.bytes=toHex(client.read(currentPid(),a,parseHex(e.bytes).length));}saveAddressEntries();main.post(()->{addressRefreshBusy=false;renderAddressEntries();});}catch(Exception ex){addressRefreshBusy=false;log("Auto-refresh stopped: "+ex.getMessage());addressAutoRefresh=false;main.post(()->{if(addressAutoButton!=null)addressAutoButton.setText("AUTO REFRESH: OFF");});}});
     }
     private boolean hasFrozenAddresses(){for(AddressEntry e:addressEntries)if(e.frozen)return true;return false;}
+    private void setAllAddressFrozen(boolean freeze) {
+        if(addressEntries.isEmpty()){toast("Address list is empty.");return;}
+        for(AddressEntry entry:addressEntries)entry.frozen=freeze;
+        saveAddressEntries();
+        renderAddressEntries();
+        addressHandler.removeCallbacks(addressFreezeTick);
+        if(freeze){
+            if(connected)addressHandler.post(addressFreezeTick);
+            else toast("All entries marked frozen. Connect to the PS5 to apply writes.");
+        } else {
+            toast("All address entries unfrozen.");
+        }
+        log((freeze?"Bulk freeze enabled for ":"Bulk freeze disabled for ")+addressEntries.size()+" address entries.");
+    }
     private void refreshFrozenAddresses() {
-        if(!connected)return;
-        List<AddressEntry> frozen=new ArrayList<>();for(AddressEntry e:addressEntries)if(e.frozen)frozen.add(e);
+        if(!connected || client==null || freezeWriteBusy)return;
+        List<AddressEntry> frozen=new ArrayList<>();
+        for(AddressEntry e:addressEntries)if(e.frozen)frozen.add(new AddressEntry(e.name,e.address,e.bytes,e.type,e.frozen));
         if(frozen.isEmpty())return;
-        worker.execute(()->{try{for(AddressEntry e:frozen){long a=resolveAddress(e.address,currentPid());client.write(currentPid(),a,parseHex(e.bytes));}}catch(Exception ex){log("Freeze write failed: "+ex.getMessage());}});
+        freezeWriteBusy=true;
+        worker.execute(()->{
+            int applied=0;
+            try {
+                int p=currentPid();
+                for(AddressEntry e:frozen){
+                    if(!connected || client==null)break;
+                    byte[] value=parseHex(e.bytes);
+                    if(value.length==0 || value.length>4096)throw new IllegalArgumentException("Invalid frozen value for "+e.name);
+                    long a=resolveAddress(e.address,p);
+                    client.write(p,a,value);
+                    applied++;
+                }
+                if(applied>0)log("Freeze cycle applied "+applied+"/"+frozen.size()+" entries.");
+            } catch(Exception ex) {
+                log("Freeze write failed after "+applied+" entr(y/ies): "+ex.getMessage());
+            } finally {
+                freezeWriteBusy=false;
+            }
+        });
     }
 
     private void scanRange() {

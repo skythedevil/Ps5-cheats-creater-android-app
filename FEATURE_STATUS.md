@@ -1,6 +1,6 @@
 # Feature implementation status
 
-Last updated: 2026-11-02. Call-stack reader and read-only code-cave discovery added to the prepared batch; no build or physical-console validation has been claimed. Updated with per-entry address-table write and read-back verification. Status is based on source code currently committed to `dev/v1.5-parity-batch`. "Implemented (not live-tested)" means a UI and protocol call exist; it does **not** mean verified against a physical PS5.
+Last updated: 2026-11-02. Call Stack Viewer and read-only Code Cave Finder are committed and CI-built (physical-console validation pending). Bulk address-table freeze/unfreeze controls and guarded freeze scheduling are included in this batch; CI validation is pending. Updated with per-entry address-table write and read-back verification. Status is based on source code currently committed to `dev/v1.5-parity-batch`. "Implemented (not live-tested)" means a UI and protocol call exist; it does **not** mean verified against a physical PS5.
 
 Legend: **Implemented** = code path exists; **Partial** = limited subset only; **Pending** = not implemented; **Test pending** = code exists but CI/device validation is not complete.
 
@@ -15,7 +15,7 @@ Legend: **Implemented** = code path exists; **Partial** = limited subset only; *
 | Exact byte scan | Partial | Client-side exact pattern scan over a user range capped at 16 MiB | AOB wildcard support, filters, paging and cancellation |
 | Turbo value scanner | Partial (not live-tested) | Dedicated second connection, TurboScan capability probe, payload auth handshake, server-resident first scans (exact/bigger/smaller/between), next scans (exact/bigger/smaller/between/increased/decreased/changed/unchanged and by-value variants), and user-paged result retrieval for byte/integer/float/double types, out-of-band cancel command, and per-result hex editing/writing | Fuzzy scans, AOB/string scans, segmented multi-region scans, live result refresh, robust cancel-state recovery and real-console validation |
 | Value scanner | Pending | — | First/next scans for all value types and compare modes |
-| Address list / freeze table | Partial (not live-tested) | Persistent address table, add/edit/remove, typed values, manual/automatic refresh, per-entry WRITE with read-back verification, freeze/unfreeze scheduler; TurboScan results can be saved to the table | Bulk freeze controls, copy as cheat, robust reconnect/foreground lifecycle handling and real-console validation |
+| Address list / freeze table | Partial (not live-tested) | Persistent address table, add/edit/remove, typed values, manual/automatic refresh, per-entry WRITE with read-back verification, per-entry and bulk freeze/unfreeze controls, guarded one-second freeze scheduler; TurboScan results can be saved to the table | Copy as cheat, robust reconnect/foreground lifecycle handling, freeze write/read-back reporting and real-console validation |
 | Hex editor | Partial | Hex dump output in memory read panel | Interactive paged editor, typed cursor values, selection/copy, edit/revert, dump |
 | Process disassembly | Partial | Calls payload disassembly command and displays instruction address/length/kind/bytes | Mnemonic/operand decoding, navigation, AOB, make signature, xrefs UI polish |
 | Cross references | Partial | RIP-relative xref search in executable regions (first 1 MiB per region) | Full-range configurable scan, result navigation, xref types |
@@ -25,10 +25,10 @@ Legend: **Implemented** = code path exists; **Partial** = limited subset only; *
 | Threads | Partial | Thread/LWP listing | Thread details, suspend/resume, selection and status |
 | Registers | Partial | Read 176-byte general register set and display named qwords | Edit/write registers, FPU/XMM/YMM, FS/GS, debug registers |
 | Stepping / run control | Partial | Process single-step command | Continue/pause, step over/out, run-to-cursor, event-driven UI |
-| Call stack | Pending | — | Stack read and frameless unwind UI |
+| Call stack | Partial (not live-tested) | Frame-pointer chain reader with RBP/RSP auto-fill from thread registers, depth limit and frame output | Frameless unwind, symbolication, click-to-navigate and real-console validation |
 | Remote calls / buffers | Pending | — | Safe call trampoline, six arguments, alloc/free, buffers and call UI |
 | Function logger | Pending | — | Hook generation, ring buffer, polling, caller grouping and export |
-| Code caves / hooks / assembler | Pending | — | Cave finder/map, assembler, hook builder and safe restore |
+| Code caves / hooks / assembler | Partial (not live-tested) | Read-only executable-region cave scan for 00/90/CC padding with bounded scan budget | Architecture-aware cave scoring, assembler, trampoline builder, hook/unhook and safe restore |
 | Cheat JSON library | Partial | Create/import/export `ps5cheat/1`; fixed hex patch steps; title-ID check; patch on/off restore | Full cheat editor, all step types, parameters, off steps, repeat, validation, groups and reorder |
 | Cheat format conversion | Pending | — | GoldHEN JSON, SHN, MC4, ShnExt, ps5pack import/export |
 | Cheat recorder / caller | Pending | — | Record memory changes/calls into cheat steps |
