@@ -83,10 +83,13 @@ public class MainActivity extends Activity {
         page.addView(host); page.addView(port);
         connectButton = button("CONNECT TO PS5", ACCENT);
         page.addView(connectButton);
+        Button discoverButton = button("DISCOVER PS5 ON NETWORK", PANEL);
+        page.addView(discoverButton);
         connectionStatus = text("●  DISCONNECTED", 13, MUTED, true);
         connectionStatus.setPadding(0, dp(10), 0, dp(4));
         page.addView(connectionStatus);
         connectButton.setOnClickListener(v -> connectOrDisconnect());
+        discoverButton.setOnClickListener(v -> discoverConsole());
 
         section(page, "02  PROCESS", "Select the running game process before using memory tools or cheats.");
         processSpinner = new Spinner(this);
@@ -325,6 +328,38 @@ public class MainActivity extends Activity {
                     Toast.makeText(this, message, Toast.LENGTH_LONG).show();
                 });
             }
+        });
+    }
+
+    private void discoverConsole() {
+        runAsync("Searching local network for ps5debug", () -> {
+            DatagramSocket udp = new DatagramSocket();
+            try {
+                udp.setBroadcast(true);
+                udp.setSoTimeout(700);
+                byte[] probe = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(0xFFFFAAAA).array();
+                DatagramPacket request = new DatagramPacket(probe, probe.length,
+                        InetAddress.getByName("255.255.255.255"), 1010);
+                for (int attempt = 0; attempt < 3; attempt++) {
+                    udp.send(request);
+                    byte[] response = new byte[16];
+                    DatagramPacket packet = new DatagramPacket(response, response.length);
+                    try {
+                        udp.receive(packet);
+                        if (packet.getLength() == 4 &&
+                                Arrays.equals(Arrays.copyOf(packet.getData(), 4), probe)) {
+                            return packet.getAddress().getHostAddress();
+                        }
+                    } catch (SocketTimeoutException ignored) { }
+                }
+                throw new IOException("No ps5debug response found. Check that the PS5 and phone are on the same LAN and UDP 1010 is reachable.");
+            } finally {
+                udp.close();
+            }
+        }, address -> {
+            host.setText(address);
+            log("Found PS5 debug server at " + address + ". Connect when ready.");
+            Toast.makeText(this, "PS5 found: " + address, Toast.LENGTH_LONG).show();
         });
     }
 
