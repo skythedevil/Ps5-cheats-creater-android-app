@@ -34,7 +34,7 @@ Legend: **Implemented** = code path exists; **Partial** = limited subset only; *
 | Pointer scanner | Pending | — | Turbo pointer-scan capability, map build, chain search, resolve/rescan and persistence |
 | Python scripting | Pending | — | Sandboxed/mobile-compatible script API, saved scripts and cancellation |
 | Kernel log | Pending | — | Port 3232 streaming and log viewer |
-| Console discovery | Pending | — | UDP 1010 discovery |
+| Console discovery | Implemented (not live-tested) | UDP broadcast probe to 255.255.255.255:1010; validates 4-byte echo and fills PS5 IP field | Test on real LANs, handle subnet-specific broadcast restrictions and multiple consoles |
 | Project management | Pending | — | Multiple game projects, settings, items and file persistence |
 | Automated tests | Pending | — | Protocol framing/status/auth/scan/debug/cheat tests and mock server |
 | PS5 live tests | Pending | — | Verify each implemented operation with a supported ps5debug-NG payload |
@@ -53,5 +53,5 @@ Legend: **Implemented** = code path exists; **Partial** = limited subset only; *
 - The debugger controls are not complete without the asynchronous TCP 755 event channel; do not treat stepping/breakpoints as fully usable until that is added and tested.
 - The disassembly panel currently shows payload instruction boundaries/kinds and raw bytes; it is not yet a full mnemonic disassembler.
 - The exact-byte scanner is a small-range fallback and is not a substitute for the original server-side TurboScan engine.
-- No physical console validation has been claimed.
+- UDP discovery is now implemented in source but has not been verified against a physical console or different Android Wi-Fi networks.\n- No physical console validation has been claimed.
 - No APK is to be shared as a user release until the release gate in [PARITY_CHECKLIST.md](PARITY_CHECKLIST.md) is met.
