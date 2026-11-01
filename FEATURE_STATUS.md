@@ -1,6 +1,6 @@
 # Feature implementation status
 
-Last updated: 2026-11-02. Updated with per-entry address-table write and read-back verification. Status is based on source code currently committed to `dev/v1.5-parity-batch`. "Implemented (not live-tested)" means a UI and protocol call exist; it does **not** mean verified against a physical PS5.
+Last updated: 2026-11-02. Call-stack reader and read-only code-cave discovery added to the prepared batch; no build or physical-console validation has been claimed. Updated with per-entry address-table write and read-back verification. Status is based on source code currently committed to `dev/v1.5-parity-batch`. "Implemented (not live-tested)" means a UI and protocol call exist; it does **not** mean verified against a physical PS5.
 
 Legend: **Implemented** = code path exists; **Partial** = limited subset only; **Pending** = not implemented; **Test pending** = code exists but CI/device validation is not complete.
 

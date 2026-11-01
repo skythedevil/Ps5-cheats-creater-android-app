@@ -62,6 +62,10 @@ public class MainActivity extends Activity {
     private EditText gameName, titleId, gameVersion, cheatName, cheatAddress, cheatBytes;
     private TextView connectionStatus, processInfo, memoryResult, scanResult, cheatStatus, mapResult, debugResult, disasmResult;
     private EditText mapFilter, disasmAddress, disasmLength, xrefTarget, breakpointIndex, breakpointAddress, watchIndex, watchAddress, threadId;
+    private EditText stackRbp, stackRsp, stackDepth;
+    private TextView stackResult;
+    private EditText caveMinSize,caveMaxMiB;
+    private TextView caveResult;
     private Spinner processSpinner;
     private LinearLayout cheatList;
     private Button connectButton;
@@ -252,6 +256,13 @@ public class MainActivity extends Activity {
         loadMaps.setOnClickListener(v -> loadMaps());
         disassemble.setOnClickListener(v -> disassembleRegion());
         xrefs.setOnClickListener(v -> findXrefs());
+        section(page, "05B  CODE CAVE FINDER", "Find executable memory padding that may be suitable for controlled code placement. This is discovery only; no bytes are modified.");
+        caveMinSize=field("Minimum cave length (bytes)","16");
+        caveMaxMiB=field("Scan budget (MiB; max 128)","32");
+        page.addView(caveMinSize);page.addView(caveMaxMiB);
+        Button caveScan=button("SCAN EXECUTABLE CODE CAVES",PANEL);page.addView(caveScan);
+        caveResult=text("No code-cave scan performed.",11,MUTED,false);caveResult.setTypeface(Typeface.MONOSPACE);page.addView(caveResult);
+        caveScan.setOnClickListener(v->scanCodeCaves());
 
         section(page, "06  DEBUGGER", "Attach/detach, software breakpoints, hardware watchpoints, thread listing and register inspection. Full async stepping/event UI is still pending.");
         breakpointIndex = field("Breakpoint slot (0–29)", "0");
@@ -276,6 +287,14 @@ public class MainActivity extends Activity {
         Button regs = button("READ GENERAL REGISTERS", PANEL);
         Button step = button("SINGLE STEP PROCESS", PANEL);
         page.addView(attach); page.addView(detach); page.addView(threads); page.addView(threadId); page.addView(regs); page.addView(step);
+        section(page, "06B  CALL STACK", "Walk the frame-pointer chain using the PS5 payload. Leave RBP/RSP blank to use the selected thread's live registers.");
+        stackRbp=field("RBP (optional; auto from registers)","");
+        stackRsp=field("RSP (optional; auto from registers)","");
+        stackDepth=field("Maximum frames (1–64)","16");
+        page.addView(stackRbp);page.addView(stackRsp);page.addView(stackDepth);
+        Button stackRead=button("READ CALL STACK",PANEL);page.addView(stackRead);
+        stackResult=text("No stack loaded.",11,MUTED,false);stackResult.setTypeface(Typeface.MONOSPACE);page.addView(stackResult);
+        stackRead.setOnClickListener(v->readCallStack());
         debugResult = text("Debugger detached.", 11, MUTED, false);
         debugResult.setTypeface(Typeface.MONOSPACE);
         page.addView(debugResult);
@@ -945,6 +964,53 @@ public class MainActivity extends Activity {
         }, disasmResult::setText);
     }
 
+    private void scanCodeCaves() {
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        final int minSize,budgetMiB;
+        try{
+            minSize=Integer.parseInt(caveMinSize.getText().toString().trim());
+            budgetMiB=Integer.parseInt(caveMaxMiB.getText().toString().trim());
+            if(minSize<4||minSize>65536)throw new IllegalArgumentException("Minimum cave size must be 4–65536 bytes.");
+            if(budgetMiB<1||budgetMiB>128)throw new IllegalArgumentException("Scan budget must be 1–128 MiB.");
+        }catch(Exception e){toast(e.getMessage());return;}
+        runAsync("Scanning executable code caves",()->{
+            int p=currentPid();List<MapEntry> regions=client.maps(p);
+            StringBuilder out=new StringBuilder("Executable padding candidates (00 / 90 / CC)\n");
+            long budget=(long)budgetMiB*1024*1024,scanned=0;int found=0;
+            for(MapEntry region:regions){
+                if((region.prot&4)==0||region.end<=region.start||scanned>=budget)continue;
+                long regionLength=Math.min(region.end-region.start,budget-scanned);
+                long cursor=region.start,runStart=-1;int runByte=-1,runLength=0;
+                while(cursor<region.start+regionLength&&found<200){
+                    int n=(int)Math.min(4096,region.start+regionLength-cursor);
+                    byte[] data=client.read(p,cursor,n);scanned+=data.length;
+                    for(int i=0;i<data.length;i++){
+                        int value=data[i]&255;
+                        if(value==0x00||value==0x90||value==0xCC){
+                            if(runLength>0&&value==runByte)runLength++;
+                            else{
+                                if(runLength>=minSize){out.append(String.format(Locale.US,"0x%016X  %6d bytes  %02X\n",runStart,runLength,runByte));found++;}
+                                runStart=cursor+i;runByte=value;runLength=1;
+                            }
+                        }else{
+                            if(runLength>=minSize){out.append(String.format(Locale.US,"0x%016X  %6d bytes  %02X\n",runStart,runLength,runByte));found++;}
+                            runStart=-1;runByte=-1;runLength=0;
+                        }
+                        if(found>=200)break;
+                    }
+                    cursor+=data.length;
+                    if(data.length==0)break;
+                }
+                if(runLength>=minSize&&found<200){out.append(String.format(Locale.US,"0x%016X  %6d bytes  %02X\n",runStart,runLength,runByte));found++;}
+            }
+            out.append("\nScanned: ").append(scanned/1048576).append(" MiB / ").append(budgetMiB).append(" MiB")
+               .append("\nCandidates shown: ").append(found);
+            if(scanned>=budget)out.append("\nScan budget reached; remaining executable regions were skipped.");
+            if(found==0)out.append("\nNo matching padding runs found.");
+            return out.toString();
+        },caveResult::setText);
+    }
+
     private void debugAttach(boolean attach) {
         if (!connected) { toast("Connect to the PS5 first."); return; }
         runAsync(attach ? "Attaching debugger" : "Detaching debugger", () -> {
@@ -998,6 +1064,53 @@ public class MainActivity extends Activity {
     private void debugStep() {
         if (!connected) { toast("Connect to the PS5 first."); return; }
         runAsync("Single stepping process", () -> { client.debugStep(); return "Single-step command accepted."; }, debugResult::setText);
+    }
+
+    private void readCallStack() {
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        final String rbpText=stackRbp.getText().toString().trim(),rspText=stackRsp.getText().toString().trim();
+        final int depth;
+        try{depth=Integer.parseInt(stackDepth.getText().toString().trim());if(depth<1||depth>64)throw new IllegalArgumentException("Frame count must be 1–64.");}
+        catch(Exception e){toast(e.getMessage());return;}
+        runAsync("Reading call stack",()->{
+            int p=currentPid();long rbp,rsp;
+            if(rbpText.isEmpty()||rspText.isEmpty()){
+                int tid=Integer.parseInt(threadId.getText().toString().trim());
+                byte[] regs=client.getRegisters(tid);
+                if(regs.length<120)throw new IOException("Register response is too short to read RBP/RSP.");
+                long liveRbp=ByteBuffer.wrap(regs,80,8).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                long liveRsp=ByteBuffer.wrap(regs,112,8).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                rbp=rbpText.isEmpty()?liveRbp:parseAddress(rbpText);
+                rsp=rspText.isEmpty()?liveRsp:parseAddress(rspText);
+            }else{rbp=parseAddress(rbpText);rsp=parseAddress(rspText);}
+            byte[] raw=client.readStack(p,rbp,rsp,depth);
+            if(raw.length<4)throw new IOException("Call-stack payload is incomplete.");
+            ByteBuffer b=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+            long count=Integer.toUnsignedLong(b.getInt());StringBuilder out=new StringBuilder("Frames returned: ").append(Math.min(count,depth)).append("\n");
+            for(int i=0;i<count&&i<depth;i++){
+                if(b.remaining()<44)throw new IOException("Truncated call-stack frame header at frame "+i+".");
+                long fRbp=b.getLong(),fRsp=b.getLong(),saved=b.getLong(),ret=b.getLong();
+                long flags=Integer.toUnsignedLong(b.getInt()),locLen=Integer.toUnsignedLong(b.getInt()),codeLen=Integer.toUnsignedLong(b.getInt());
+                if(locLen>b.remaining()||codeLen>b.remaining()-locLen)throw new IOException("Invalid frame payload lengths at frame "+i+".");
+                byte[] loc=new byte[(int)locLen];b.get(loc);byte[] code=new byte[(int)codeLen];b.get(code);
+                String location=new String(loc,StandardCharsets.UTF_8).replace(String.valueOf((char)0),"").trim();
+                out.append("\n#").append(i).append("  RIP 0x").append(String.format(Locale.US,"%016X",ret))
+                   .append("\n   RBP 0x").append(String.format(Locale.US,"%016X",fRbp))
+                   .append("  RSP 0x").append(String.format(Locale.US,"%016X",fRsp))
+                   .append("\n   saved RBP 0x").append(String.format(Locale.US,"%016X",saved))
+                   .append("  flags 0x").append(Long.toHexString(flags).toUpperCase(Locale.US));
+                if(!location.isEmpty())out.append("\n   ").append(location);
+                if(code.length>0)out.append("\n   code: ").append(toHex(Arrays.copyOf(code,Math.min(code.length,24))));
+                out.append('\n');
+            }
+            if(count==0)out.append("No frame-pointer chain found; the title may omit frame pointers or the thread may not be paused.");
+            return out.toString();
+        },stackResult::setText);
+    }
+
+    private static long parseAddress(String value) {
+        String s=value.trim();if(s.startsWith("0x")||s.startsWith("0X"))return Long.parseUnsignedLong(s.substring(2),16);
+        return Long.decode(s);
     }
 
     private void createGameFile() {
@@ -1258,6 +1371,7 @@ public class MainActivity extends Activity {
         private static final int CMD_PROC_INFO = (int)0xBDAA000A;
         private static final int CMD_PROC_DISASM_REGION = (int)0xBDAA0020;
         private static final int CMD_PROC_FIND_XREFS_TO = (int)0xBDAA0022;
+        private static final int CMD_PROC_READ_STACK = (int)0xBDAA0023;
         private static final int CMD_DEBUG_ATTACH = (int)0xBDBB0001;
         private static final int CMD_DEBUG_DETACH = (int)0xBDBB0002;
         private static final int CMD_DEBUG_SET_BREAKPOINT = (int)0xBDBB0003;
@@ -1456,6 +1570,15 @@ public class MainActivity extends Activity {
             out.write(data);
             out.flush();
             expectSuccess("Memory write");
+        }
+        synchronized byte[] readStack(int pid,long rbp,long rsp,int depth) throws IOException {
+            if(depth<1||depth>64)throw new IOException("Stack depth must be 1–64.");
+            ByteBuffer body=ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN);
+            body.putInt(pid).putLong(rbp).putLong(rsp).putInt(depth);
+            send(CMD_PROC_READ_STACK,body.array());expectSuccess("Call stack");
+            int length=readIntLE();
+            if(length<4||length>1024*1024)throw new IOException("Invalid call-stack response length: "+length);
+            return readBytes(length);
         }
         synchronized List<DisasmEntry> disassemble(int pid, long address, int length, int max) throws IOException {
             ByteBuffer body = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN);
