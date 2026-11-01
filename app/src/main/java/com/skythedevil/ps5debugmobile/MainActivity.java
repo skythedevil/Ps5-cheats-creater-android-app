@@ -35,6 +35,7 @@ public class MainActivity extends Activity {
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ExecutorService cancelWorker = Executors.newSingleThreadExecutor();
     private PS5Client client;
     private boolean connected = false;
     private List<ProcessEntry> processes = new ArrayList<>();
@@ -173,13 +174,15 @@ public class MainActivity extends Activity {
         Button turboNext = button("NEXT SCAN (EXACT VALUE)", PANEL);
         Button turboGet = button("LOAD FIRST 100 RESULTS", PANEL);
         Button turboEnd = button("END SCAN SESSION", PANEL);
-        page.addView(turboFirst); page.addView(turboNext); page.addView(turboGet); page.addView(turboEnd);
+        Button turboCancel = button("CANCEL RUNNING SCAN", PANEL);
+        page.addView(turboFirst); page.addView(turboNext); page.addView(turboGet); page.addView(turboEnd); page.addView(turboCancel);
         turboResult = text("TurboScan not started. Requires payload TurboScan support.", 11, MUTED, false);
         turboResult.setTypeface(Typeface.MONOSPACE); page.addView(turboResult);
         turboFirst.setOnClickListener(v -> turboFirstScan());
         turboNext.setOnClickListener(v -> turboNextScan());
         turboGet.setOnClickListener(v -> turboLoadResults());
         turboEnd.setOnClickListener(v -> turboEndScan());
+        turboCancel.setOnClickListener(v -> turboCancelScan());
 
         section(page, "05  MEMORY MAPS & CODE INSPECTION", "Inspect mapped modules/regions, decode x86-64 instruction boundaries using the payload, and search RIP-relative cross-references.");
         mapFilter = field("Optional module/name filter", "");
@@ -608,6 +611,15 @@ public class MainActivity extends Activity {
             return b.toString();
         },result->turboResult.setText(result));
     }
+    private void turboCancelScan() {
+        if(!connected || !turboActive || client==null) { toast("No running TurboScan to cancel."); return; }
+        log("Sending TurboScan cancellation request…");
+        cancelWorker.execute(()->{
+            try { client.turboCancel(currentPid()); main.post(()->{turboActive=false;turboResult.setText("TurboScan cancellation requested. Start a new scan when ready.");}); }
+            catch(Exception e){String m=e.getMessage()==null?e.toString():e.getMessage();main.post(()->toast("Cancel failed: "+m));}
+        });
+    }
+
     private void turboEndScan() {
         if(scanClient==null || !turboActive) { toast("No TurboScan session."); return; }
         runAsync("Ending TurboScan",()->{scanClient.turboEnd();turboActive=false;return "TurboScan session ended.";},result->turboResult.setText(result));
@@ -937,6 +949,7 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         super.onDestroy();
         worker.shutdownNow();
+        cancelWorker.shutdownNow();
         if (client != null) client.close();
         if (scanClient != null) scanClient.close();
     }
@@ -965,7 +978,7 @@ public class MainActivity extends Activity {
         private static final int MAGIC = (int)0xFFAABBCC;
         private static final int SUCCESS = (int)0x80000000;
         private static final int CMD_VERSION = (int)0xBD000001;
-        private static final int CMD_TURBO_CAPS = (int)0xBDAACC10, CMD_TURBO_START = (int)0xBDAACC11, CMD_TURBO_COUNT = (int)0xBDAACC12, CMD_TURBO_GET = (int)0xBDAACC13, CMD_TURBO_END = (int)0xBDAACC14, CMD_PROC_AUTH = (int)0xBDAACCFF;
+        private static final int CMD_TURBO_CAPS = (int)0xBDAACC10, CMD_TURBO_START = (int)0xBDAACC11, CMD_TURBO_COUNT = (int)0xBDAACC12, CMD_TURBO_GET = (int)0xBDAACC13, CMD_TURBO_END = (int)0xBDAACC14, CMD_TURBO_CANCEL = (int)0xBDAACC17, CMD_PROC_AUTH = (int)0xBDAACCFF;
         private boolean authenticated=false;
         private int activeTurboPid=0, activeTurboType=4, turboEngines=0;
         private static final int CMD_PROC_LIST = (int)0xBDAA0001;
@@ -1051,7 +1064,8 @@ public class MainActivity extends Activity {
             int hdr=readIntLE(),n=hdr&0x7FFFFFFF;boolean three=(hdr&0x80000000)!=0;if(n<0||n>10000)throw new IOException("Invalid result count.");int rec=8+valueLength*(three?3:2);byte[] raw=readBytes(n*rec);expectSuccess("TurboScan get completion");
             List<TurboResult> rows=new ArrayList<>();for(int i=0;i<n;i++){int o=i*rec;TurboResult x=new TurboResult();x.address=ByteBuffer.wrap(raw,o,8).order(ByteOrder.LITTLE_ENDIAN).getLong();x.current=Arrays.copyOfRange(raw,o+8,o+8+valueLength);x.previous=Arrays.copyOfRange(raw,o+8+valueLength,o+8+2*valueLength);rows.add(x);}return rows;
         }
-        synchronized void turboEnd() throws IOException {auth();send(CMD_TURBO_END,new byte[0]);expectSuccess("TurboScan end");activeTurboPid=0;} 
+        synchronized void turboEnd() throws IOException {auth();send(CMD_TURBO_END,new byte[0]);expectSuccess("TurboScan end");activeTurboPid=0;}
+        synchronized void turboCancel(int pid) throws IOException {auth();send(CMD_TURBO_CANCEL,ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(pid).array());expectSuccess("TurboScan cancel");} 
 
         private void ensureConnected() throws IOException {
             if (socket == null || socket.isClosed()) throw new IOException("Not connected to the PS5.");
