@@ -166,7 +166,7 @@ public class MainActivity extends Activity {
         turboType.setSelection(4);
         page.addView(turboType);
         turboCompare = new Spinner(this);
-        String[] compareLabels = {"Exact value", "Bigger than", "Smaller than", "Between low/high", "Increased", "Increased by", "Decreased", "Decreased by", "Changed", "Unchanged", "Unknown initial value"};
+        String[] compareLabels = {"Exact value", "Fuzzy (±1)", "Bigger than", "Smaller than", "Between low/high", "Increased", "Increased by", "Decreased", "Decreased by", "Changed", "Unchanged", "Unknown initial value"};
         turboCompare.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, compareLabels));
         page.addView(turboCompare);
         turboValue = field("Value (for Between use low,high)", "100"); page.addView(turboValue);
@@ -574,7 +574,7 @@ public class MainActivity extends Activity {
         if(compare==4) { String[] pair=raw.split(",",2); if(pair.length!=2) throw new IllegalArgumentException("Between scan needs two comma-separated values: low,high"); byte[] lo=encodeTurboValue(type,pair[0].trim()),hi=encodeTurboValue(type,pair[1].trim()); byte[] both=Arrays.copyOf(lo,lo.length+hi.length);System.arraycopy(hi,0,both,lo.length,hi.length);return both; }
         return encodeTurboValue(type,raw);
     }
-    private static final int[] TURBO_COMPARE_CODES={0,2,3,4,5,6,7,8,9,10,11};
+    private static final int[] TURBO_COMPARE_CODES={0,1,2,3,4,5,6,7,8,9,10,11};
     private void turboFirstScan() {
         if(!connected) { toast("Connect to the PS5 first."); return; }
         runAsync("Starting TurboScan",()->{
@@ -583,7 +583,8 @@ public class MainActivity extends Activity {
             int length=Integer.decode(scanLength.getText().toString().trim());
             if(length<1) throw new IllegalArgumentException("Enter a positive scan range.");
             int type=turboType.getSelectedItemPosition(); int ci=turboCompare.getSelectedItemPosition();
-            if(ci>3 && ci!=10) throw new IllegalArgumentException("First scan supports Exact, Bigger, Smaller, Between or Unknown Initial Value.");
+            if(ci>4 && ci!=11) throw new IllegalArgumentException("First scan supports Exact, Fuzzy, Bigger, Smaller, Between or Unknown Initial Value.");
+             if(ci==1 && type!=8 && type!=9) throw new IllegalArgumentException("Fuzzy (±1) scan is supported only for Float and Double.");
             int compare=TURBO_COMPARE_CODES[ci]; byte[] value=encodeTurboCompareValue(type,compare,turboValue.getText().toString().trim());
             long count=compare==11?scanClient.turboUnknownFirstScan(p,start,length,type):scanClient.turboFirstScan(p,start,length,type,compare,value);
             turboActive=true; turboValueType=type; turboValueLength=(type==4||type==5?4:type==6||type==7||type==9?8:type==8?4:type==2||type==3?2:1); turboResultTotal=count;
@@ -594,7 +595,8 @@ public class MainActivity extends Activity {
         if(!connected || !turboActive || scanClient==null) { toast("Run Turbo First Scan first."); return; }
         runAsync("Refining TurboScan",()->{
             if(turboType.getSelectedItemPosition()!=turboValueType) throw new IllegalArgumentException("Value type cannot change during a scan.");
-            int ci=turboCompare.getSelectedItemPosition(); if(ci==10) throw new IllegalArgumentException("Unknown Initial Value is only available for First Scan.");
+            int ci=turboCompare.getSelectedItemPosition(); if(ci==11) throw new IllegalArgumentException("Unknown Initial Value is only available for First Scan.");
+             if(ci==1 && turboValueType!=8 && turboValueType!=9) throw new IllegalArgumentException("Fuzzy (±1) scan is supported only for Float and Double.");
             int compare=TURBO_COMPARE_CODES[ci];
             byte[] value=encodeTurboCompareValue(turboValueType,compare,turboValue.getText().toString().trim());
             turboResultTotal=scanClient.turboNextScan(compare,value,turboValueLength);
