@@ -467,7 +467,7 @@ public class MainActivity extends Activity {
         log(action + "…");
         worker.execute(() -> {
             try {
-                String result = task.call();
+                T result = task.call();
                 main.post(() -> onSuccess.accept(result));
             } catch (Exception ex) {
                 String message = ex.getMessage() == null ? ex.toString() : ex.getMessage();
