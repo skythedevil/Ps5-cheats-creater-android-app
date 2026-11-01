@@ -613,9 +613,11 @@ public class MainActivity extends Activity {
     }
     private void turboCancelScan() {
         if(!connected || !turboActive || client==null) { toast("No running TurboScan to cancel."); return; }
+        final int cancelPid;
+        try { cancelPid=currentPid(); } catch(Exception e) { toast(e.getMessage()); return; }
         log("Sending TurboScan cancellation request…");
         cancelWorker.execute(()->{
-            try { client.turboCancel(currentPid()); main.post(()->{turboActive=false;turboResult.setText("TurboScan cancellation requested. Start a new scan when ready.");}); }
+            try { client.turboCancel(cancelPid); main.post(()->{turboActive=false;turboResult.setText("TurboScan cancellation requested. Start a new scan when ready.");}); }
             catch(Exception e){String m=e.getMessage()==null?e.toString():e.getMessage();main.post(()->toast("Cancel failed: "+m));}
         });
     }
