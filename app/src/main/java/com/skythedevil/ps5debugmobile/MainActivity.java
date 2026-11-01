@@ -813,8 +813,25 @@ public class MainActivity extends Activity {
             LinearLayout row=new LinearLayout(this);row.setOrientation(LinearLayout.VERTICAL);row.setPadding(dp(9),dp(7),dp(9),dp(7));row.setBackgroundColor(PANEL);
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(4);turboRows.addView(row,lp);
             TextView label=text(String.format(Locale.US,"0x%016X\\nCurrent: %s\\nPrevious: %s",item.address,toHex(item.current),toHex(item.previous)),11,TEXT,false);label.setTypeface(Typeface.MONOSPACE);row.addView(label);
-            Button edit=button("EDIT FOUND VALUE (HEX)",PANEL);row.addView(edit);edit.setOnClickListener(v->editTurboResult(item.address,item.current));
+            LinearLayout actions=new LinearLayout(this); actions.setOrientation(LinearLayout.HORIZONTAL);
+            Button edit=button("EDIT VALUE (HEX)",PANEL), save=button("SAVE TO ADDRESS TABLE",PANEL);
+            actions.addView(edit,new LinearLayout.LayoutParams(0,dp(48),1));
+            actions.addView(save,new LinearLayout.LayoutParams(0,dp(48),1));
+            row.addView(actions);
+            edit.setOnClickListener(v->editTurboResult(item.address,item.current));
+            save.setOnClickListener(v->saveTurboResultToAddressTable(item));
         }
+    }
+    private void saveTurboResultToAddressTable(PS5Client.TurboResult item) {
+        String address=String.format(Locale.US,"0x%016X",item.address);
+        for(AddressEntry entry:addressEntries) {
+            if(entry.address.equalsIgnoreCase(address)) { toast("This address is already in the address table."); return; }
+        }
+        addressEntries.add(new AddressEntry("Turbo result "+(addressEntries.size()+1),address,toHex(item.current),0,false));
+        saveAddressEntries();
+        renderAddressEntries();
+        log("Saved scan result to address table: "+address);
+        toast("Saved to address table. You can now read, edit, freeze or remove it.");
     }
     private void editTurboResult(long address,byte[] current) {
         if(!connected){toast("Connect to the PS5 first.");return;}
