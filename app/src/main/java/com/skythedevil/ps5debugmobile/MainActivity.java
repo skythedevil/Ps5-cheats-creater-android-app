@@ -51,6 +51,8 @@ public class MainActivity extends Activity {
     private Spinner turboType;
     private Spinner turboCompare;
     private TextView turboResult;
+    private LinearLayout turboRows;
+    private List<PS5Client.TurboResult> lastTurboResults = new ArrayList<>();
     private PS5Client scanClient;
     private boolean turboActive = false;
     private int turboValueType = 4;
@@ -178,6 +180,7 @@ public class MainActivity extends Activity {
         page.addView(turboFirst); page.addView(turboNext); page.addView(turboGet); page.addView(turboEnd); page.addView(turboCancel);
         turboResult = text("TurboScan not started. Requires payload TurboScan support.", 11, MUTED, false);
         turboResult.setTypeface(Typeface.MONOSPACE); page.addView(turboResult);
+        turboRows=new LinearLayout(this); turboRows.setOrientation(LinearLayout.VERTICAL); page.addView(turboRows);
         turboFirst.setOnClickListener(v -> turboFirstScan());
         turboNext.setOnClickListener(v -> turboNextScan());
         turboGet.setOnClickListener(v -> turboLoadResults());
@@ -605,11 +608,29 @@ public class MainActivity extends Activity {
             int count=Integer.parseInt(turboResultCount.getText().toString().trim());
             if(start<0||count<1||count>500) throw new IllegalArgumentException("Result page must start at 0 or higher and contain 1–500 rows.");
             if(start>=turboResultTotal) throw new IllegalArgumentException("Page start is beyond the current result count.");
-            List<PS5Client.TurboResult> rows=scanClient.turboGet(start,count,turboValueLength);
+            List<PS5Client.TurboResult> rows=scanClient.turboGet(start,count,turboValueLength); lastTurboResults=rows;
             StringBuilder b=new StringBuilder("Results ").append(start).append("–").append(start+rows.size()-1).append(" of ").append(turboResultTotal).append(":\\n");
             for(PS5Client.TurboResult r:rows) b.append(String.format(Locale.US,"0x%016X  current=%s  previous=%s\\n",r.address,toHex(r.current),toHex(r.previous)));
             return b.toString();
-        },result->turboResult.setText(result));
+        },result->{turboResult.setText(result);renderTurboRows();});
+    }
+    private void renderTurboRows() {
+        turboRows.removeAllViews();
+        for(PS5Client.TurboResult item:lastTurboResults) {
+            LinearLayout row=new LinearLayout(this);row.setOrientation(LinearLayout.VERTICAL);row.setPadding(dp(9),dp(7),dp(9),dp(7));row.setBackgroundColor(PANEL);
+            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(4);turboRows.addView(row,lp);
+            TextView label=text(String.format(Locale.US,"0x%016X\\nCurrent: %s\\nPrevious: %s",item.address,toHex(item.current),toHex(item.previous)),11,TEXT,false);label.setTypeface(Typeface.MONOSPACE);row.addView(label);
+            Button edit=button("EDIT FOUND VALUE (HEX)",PANEL);row.addView(edit);edit.setOnClickListener(v->editTurboResult(item.address,item.current));
+        }
+    }
+    private void editTurboResult(long address,byte[] current) {
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        EditText value=new EditText(this);value.setSingleLine(true);value.setText(toHex(current));value.setTextColor(TEXT);value.setHintTextColor(MUTED);
+        new android.app.AlertDialog.Builder(this).setTitle("Edit memory at 0x"+Long.toHexString(address).toUpperCase(Locale.US)).setMessage("Enter exactly "+current.length+" byte(s) in hexadecimal.").setView(value).setNegativeButton("Cancel",null).setPositiveButton("WRITE",(d,w)->{
+            try {byte[] patch=parseHex(value.getText().toString());if(patch.length!=current.length)throw new IllegalArgumentException("New value must be exactly "+current.length+" byte(s).");
+                runAsync("Editing found memory value",()->{client.write(currentPid(),address,patch);return "Updated memory at 0x"+Long.toHexString(address).toUpperCase(Locale.US);},result->{log(result);});
+            } catch(Exception e){toast(e.getMessage());}
+        }).show();
     }
     private void turboCancelScan() {
         if(!connected || !turboActive || client==null) { toast("No running TurboScan to cancel."); return; }
