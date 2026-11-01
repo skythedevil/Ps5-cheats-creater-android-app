@@ -46,6 +46,10 @@ public class MainActivity extends Activity {
 
     private EditText host, port, pid, readAddress, readLength, writeAddress, writeBytes;
     private EditText scanAddress, scanLength, scanBytes;
+    private EditText hexEditorInput;
+    private TextView hexEditorInfo;
+    private byte[] hexEditorOriginal = new byte[0];
+    private long hexEditorBase = 0;
     private EditText turboValue, turboResultStart, turboResultCount;
     private long turboResultTotal=0;
     private Spinner turboType;
@@ -155,6 +159,41 @@ public class MainActivity extends Activity {
         memoryResult.setTypeface(Typeface.MONOSPACE);
         page.addView(memoryResult);
         read.setOnClickListener(v -> readMemory());
+
+        section(page, "03A  PAGED HEX EDITOR", "Edit the bytes from the current read address. Pages are bounded to 4096 bytes; writes are read back for verification.");
+        hexEditorInfo = text("No page loaded. Use READ MEMORY to load the current address.", 11, MUTED, false);
+        page.addView(hexEditorInfo);
+        hexEditorInput = new EditText(this);
+        hexEditorInput.setTextColor(TEXT);
+        hexEditorInput.setHintTextColor(MUTED);
+        hexEditorInput.setHint("00 11 22 33 ...");
+        hexEditorInput.setGravity(Gravity.TOP | Gravity.START);
+        hexEditorInput.setTypeface(Typeface.MONOSPACE);
+        hexEditorInput.setTextSize(13);
+        hexEditorInput.setSingleLine(false);
+        hexEditorInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        hexEditorInput.setMinLines(5);
+        hexEditorInput.setPadding(dp(12), dp(10), dp(12), dp(10));
+        hexEditorInput.setBackgroundColor(PANEL);
+        page.addView(hexEditorInput, new LinearLayout.LayoutParams(-1, dp(150)));
+        LinearLayout hexNav = new LinearLayout(this);
+        hexNav.setOrientation(LinearLayout.HORIZONTAL);
+        Button hexPrevious = button("PREVIOUS PAGE", PANEL);
+        Button hexNext = button("NEXT PAGE", PANEL);
+        hexNav.addView(hexPrevious, new LinearLayout.LayoutParams(0, dp(46), 1));
+        hexNav.addView(hexNext, new LinearLayout.LayoutParams(0, dp(46), 1));
+        page.addView(hexNav);
+        LinearLayout hexActions = new LinearLayout(this);
+        hexActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button hexWrite = button("WRITE + VERIFY", ACCENT);
+        Button hexRestore = button("RESTORE ORIGINAL", PANEL);
+        hexActions.addView(hexWrite, new LinearLayout.LayoutParams(0, dp(46), 1));
+        hexActions.addView(hexRestore, new LinearLayout.LayoutParams(0, dp(46), 1));
+        page.addView(hexActions);
+        hexPrevious.setOnClickListener(v -> moveHexEditorPage(-1));
+        hexNext.setOnClickListener(v -> moveHexEditorPage(1));
+        hexWrite.setOnClickListener(v -> writeHexEditorPage(false));
+        hexRestore.setOnClickListener(v -> writeHexEditorPage(true));
 
         writeAddress = field("Write address", "0x0");
         writeBytes = field("Bytes to write (hex)", "90 90 90");
@@ -424,7 +463,7 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void runAsync(String action, Callable<String> task, Consumer<String> onSuccess) {
+    private <T> void runAsync(String action, Callable<T> task, Consumer<T> onSuccess) {
         log(action + "…");
         worker.execute(() -> {
             try {
@@ -557,9 +596,57 @@ public class MainActivity extends Activity {
             long address = resolveAddress(readAddress.getText().toString().trim(), p);
             int length = Integer.decode(readLength.getText().toString().trim());
             if (length < 1 || length > 4096) throw new IllegalArgumentException("Read length must be 1–4096 bytes.");
-            byte[] data = client.read(p, address, length);
-            return "0x" + Long.toHexString(address).toUpperCase(Locale.US) + "\n" + hexDump(data, address);
-        }, value -> memoryResult.setText(value));
+            return new HexPage(address, client.read(p, address, length));
+        }, page -> {
+            hexEditorBase = page.address;
+            hexEditorOriginal = page.data.clone();
+            hexEditorInput.setText(toHex(page.data));
+            hexEditorInfo.setText(String.format(Locale.US, "Loaded %d bytes at 0x%X  •  Edit hex bytes, then WRITE + VERIFY.", page.data.length, page.address));
+            memoryResult.setText("0x" + Long.toHexString(page.address).toUpperCase(Locale.US) + "\n" + hexDump(page.data, page.address));
+        });
+    }
+
+    private static final class HexPage {
+        final long address; final byte[] data;
+        HexPage(long address, byte[] data) { this.address = address; this.data = data; }
+    }
+
+    private void moveHexEditorPage(int direction) {
+        try {
+            int length = Integer.decode(readLength.getText().toString().trim());
+            if (length < 1 || length > 4096) throw new IllegalArgumentException("Page size must be 1–4096 bytes.");
+            long base = resolveAddress(readAddress.getText().toString().trim(), currentPid());
+            long next = Math.addExact(base, (long)direction * length);
+            if (next < 0) throw new IllegalArgumentException("Address is outside the supported range.");
+            readAddress.setText("0x" + Long.toHexString(next).toUpperCase(Locale.US));
+            readMemory();
+        } catch (Exception e) { toast("Cannot change page: " + e.getMessage()); }
+    }
+
+    private void writeHexEditorPage(boolean restoreOriginal) {
+        if (!connected) { toast("Connect to the PS5 first."); return; }
+        if (hexEditorOriginal.length == 0) { toast("Load a memory page first."); return; }
+        final byte[] data;
+        try {
+            data = restoreOriginal ? hexEditorOriginal.clone() : parseHex(hexEditorInput.getText().toString());
+            if (data.length == 0 || data.length > 4096) throw new IllegalArgumentException("Write 1–4096 bytes.");
+            if (restoreOriginal && data.length != hexEditorOriginal.length) throw new IllegalArgumentException("Original page snapshot is invalid.");
+        } catch (Exception e) { toast("Invalid hex data: " + e.getMessage()); return; }
+        final long address = hexEditorBase;
+        runAsync(restoreOriginal ? "Restoring original bytes" : "Writing hex page", () -> {
+            int p = currentPid();
+            client.write(p, address, data);
+            byte[] actual = client.read(p, address, data.length);
+            if (!Arrays.equals(data, actual)) throw new IOException("Read-back verification failed; memory does not match the requested bytes.");
+            return new HexPage(address, actual);
+        }, page -> {
+            hexEditorBase = page.address;
+            hexEditorOriginal = page.data.clone();
+            hexEditorInput.setText(toHex(page.data));
+            hexEditorInfo.setText(String.format(Locale.US, "Verified %d bytes at 0x%X  •  Snapshot updated.", page.data.length, page.address));
+            memoryResult.setText("0x" + Long.toHexString(page.address).toUpperCase(Locale.US) + "\n" + hexDump(page.data, page.address));
+            log((restoreOriginal ? "Restored original " : "Wrote and verified ") + page.data.length + " bytes at 0x" + Long.toHexString(page.address).toUpperCase(Locale.US));
+        });
     }
 
     private void writeMemory() {

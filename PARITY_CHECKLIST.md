@@ -22,7 +22,8 @@ Reference: https://github.com/alfizari/PS5Debug-studio/tree/V1.5
 - [ ] Address list: add/edit/delete, type change, freeze/unfreeze, bulk freeze writes, save/load tables, copy as cheat.
 
 ## Memory inspection and code tools
-- [ ] Hex editor: paged view, typed values, selection/copy formats, edit, write/revert and region dump.
+- [x] Hex editor: bounded paged byte view, editable hex buffer, page navigation, write/read-back verification and restore-original snapshot.
+- [ ] Hex editor follow-ups: typed values, selection/copy formats and region dump/export.
 - [ ] Disassembler: x86-64 decoding, navigation, AOB search, make AOB from selection, references/xrefs.
 - [ ] Assemble-in-place and patch/NOP operations.
 - [ ] Code-cave finder/map, cave assembly, hook generation and restore.
