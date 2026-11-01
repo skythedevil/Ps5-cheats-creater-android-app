@@ -205,9 +205,15 @@ public class MainActivity extends Activity {
         turboValue = field("Value (for Between use low,high)", "100"); page.addView(turboValue);
         turboResultStart=field("Result page start index", "0"); turboResultCount=field("Results per page (1–500)", "100");
         page.addView(turboResultStart); page.addView(turboResultCount);
+        LinearLayout turboPageNav=new LinearLayout(this); turboPageNav.setOrientation(LinearLayout.HORIZONTAL);
+        Button turboPrevPage=button("PREVIOUS PAGE",PANEL), turboNextPage=button("NEXT PAGE",PANEL), turboReloadPage=button("RELOAD PAGE",PANEL);
+        turboPageNav.addView(turboPrevPage,new LinearLayout.LayoutParams(0,dp(48),1));
+        turboPageNav.addView(turboNextPage,new LinearLayout.LayoutParams(0,dp(48),1));
+        turboPageNav.addView(turboReloadPage,new LinearLayout.LayoutParams(0,dp(48),1));
+        page.addView(turboPageNav);
         Button turboFirst = button("TURBO FIRST SCAN", ACCENT);
         Button turboNext = button("NEXT SCAN (EXACT VALUE)", PANEL);
-        Button turboGet = button("LOAD FIRST 100 RESULTS", PANEL);
+        Button turboGet = button("LOAD RESULTS PAGE", PANEL);
         Button turboEnd = button("END SCAN SESSION", PANEL);
         Button turboCancel = button("CANCEL RUNNING SCAN", PANEL);
         page.addView(turboFirst); page.addView(turboNext); page.addView(turboGet); page.addView(turboEnd); page.addView(turboCancel);
@@ -217,6 +223,9 @@ public class MainActivity extends Activity {
         turboFirst.setOnClickListener(v -> turboFirstScan());
         turboNext.setOnClickListener(v -> turboNextScan());
         turboGet.setOnClickListener(v -> turboLoadResults());
+        turboPrevPage.setOnClickListener(v -> moveTurboPage(-1));
+        turboNextPage.setOnClickListener(v -> moveTurboPage(1));
+        turboReloadPage.setOnClickListener(v -> turboLoadResults());
         turboEnd.setOnClickListener(v -> turboEndScan());
         turboCancel.setOnClickListener(v -> turboCancelScan());
 
@@ -332,7 +341,7 @@ public class MainActivity extends Activity {
         parent.addView(box, lp);
         TextView h = text(heading, 14, TEXT, true);
         box.addView(h);
-        TextView d = text(detail, 11, MUTED, false);
+        TextView d = text(detail, 12, MUTED, false);
         d.setPadding(0, dp(5), 0, 0);
         box.addView(d);
     }
@@ -344,7 +353,7 @@ public class MainActivity extends Activity {
         e.setHint(hint);
         e.setHintTextColor(MUTED);
         e.setTextColor(TEXT);
-        e.setTextSize(14);
+        e.setTextSize(16);
         e.setPadding(dp(12), dp(5), dp(12), dp(5));
         e.setBackgroundTintList(android.content.res.ColorStateList.valueOf(ACCENT));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(48));
@@ -360,7 +369,7 @@ public class MainActivity extends Activity {
     private TextView text(String value, int size, int color, boolean bold) {
         TextView t = new TextView(this);
         t.setText(value);
-        t.setTextSize(size);
+        t.setTextSize(Math.max(size, 13));
         t.setTextColor(color);
         if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         t.setPadding(0, dp(3), 0, dp(3));
@@ -370,7 +379,7 @@ public class MainActivity extends Activity {
     private Button button(String label, int color) {
         Button b = new Button(this);
         b.setText(label);
-        b.setTextSize(12);
+        b.setTextSize(13);
         b.setTextColor(TEXT);
         b.setAllCaps(false);
         b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -719,7 +728,7 @@ public class MainActivity extends Activity {
             turboActive=true; turboValueType=type; turboValueLength=(type==4||type==5?4:type==6||type==7||type==9?8:type==8?4:type==2||type==3?2:1); turboResultTotal=count;
             long totalBytes=0; for(TurboSegment seg:segments) totalBytes+=seg.length;
             return "TurboScan started. Results: "+count+"\\nRegions: "+segments.size()+" | Selected memory: "+(totalBytes/1048576)+" MiB";
-        },result->turboResult.setText(result));
+        },result->{turboResultStart.setText("0");lastTurboResults.clear();renderTurboRows();turboResult.setText(result);});
     }
     private int parseTurboAlignment() {
         int a=Integer.parseInt(turboAlignment.getText().toString().trim());
@@ -771,7 +780,19 @@ public class MainActivity extends Activity {
             byte[] value=encodeTurboCompareValue(turboValueType,compare,turboValue.getText().toString().trim());
             turboResultTotal=scanClient.turboNextScan(compare,value,turboValueLength);
             return "Next Scan complete. Remaining results: "+turboResultTotal;
-        },result->turboResult.setText(result));
+        },result->{turboResultStart.setText("0");lastTurboResults.clear();renderTurboRows();turboResult.setText(result);});
+    }
+    private void moveTurboPage(int direction) {
+        try {
+            int start=Integer.parseInt(turboResultStart.getText().toString().trim());
+            int count=Integer.parseInt(turboResultCount.getText().toString().trim());
+            if(count<1||count>500) throw new IllegalArgumentException("Page size must be 1–500.");
+            long next=(long)start+(long)direction*count;
+            if(next<0) { toast("Already at the first results page."); return; }
+            if(next>=turboResultTotal) { toast("Already at the last results page."); return; }
+            turboResultStart.setText(String.valueOf(next));
+            turboLoadResults();
+        } catch(Exception e) { toast(e.getMessage()==null?"Invalid page settings.":e.getMessage()); }
     }
     private void turboLoadResults() {
         if(!turboActive || scanClient==null) { toast("Run Turbo First Scan first."); return; }
