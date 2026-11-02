@@ -280,11 +280,13 @@ public class MainActivity extends Activity {
         pointerActions.addView(pointerScan,new LinearLayout.LayoutParams(0,dp(48),1));
         pointerActions.addView(pointerCancelButton,new LinearLayout.LayoutParams(0,dp(48),1)); page.addView(pointerActions);
         LinearLayout pointerSavedActions=new LinearLayout(this);pointerSavedActions.setOrientation(LinearLayout.HORIZONTAL);
-        Button savePointerResults=button("SAVE CHAINS",PANEL),loadPointerResults=button("LOAD SAVED CHAINS",PANEL);
+        Button savePointerResults=button("SAVE CHAINS",PANEL),loadPointerResults=button("LOAD SAVED CHAINS",PANEL),resolvePointerResults=button("RESOLVE LIVE CHAINS",PANEL);
         pointerSavedActions.addView(savePointerResults,new LinearLayout.LayoutParams(0,dp(48),1));
         pointerSavedActions.addView(loadPointerResults,new LinearLayout.LayoutParams(0,dp(48),1));page.addView(pointerSavedActions);
+        page.addView(resolvePointerResults);
         savePointerResults.setOnClickListener(v->savePointerChains());
         loadPointerResults.setOnClickListener(v->loadPointerChains());
+        resolvePointerResults.setOnClickListener(v->resolvePointerChains());
         pointerResult=text("No pointer scan performed. Readable memory; module regions prioritized; bounded by the MiB budget.",11,MUTED,false);
         pointerResult.setTypeface(Typeface.MONOSPACE); page.addView(pointerResult);
         pointerScan.setOnClickListener(v->startPointerScan());
@@ -1352,6 +1354,50 @@ public class MainActivity extends Activity {
             }
             pointerResult.setText(out.toString());toast("Loaded "+loaded.size()+" saved pointer chains.");
         }catch(Exception e){toast("Could not load saved pointer chains: "+e.getMessage());}
+    }
+
+    private void resolvePointerChains(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        if(lastPointerHits.isEmpty()){toast("Run a pointer scan or load saved chains first.");return;}
+        pointerResult.setText("Resolving saved chains against current process memory…");
+        runAsync("Resolving pointer chains",()->{
+            int pid=currentPid();List<MapEntry> maps=client.maps(pid);
+            Map<String,Long> moduleBases=new HashMap<>();
+            for(MapEntry m:maps){
+                if(!isPointerModule(m)||m.name==null)continue;
+                Long old=moduleBases.get(m.name);
+                if(old==null||Long.compareUnsigned(m.start,old)<0)moduleBases.put(m.name,m.start);
+            }
+            StringBuilder out=new StringBuilder("LIVE POINTER CHAIN RESOLUTION\nPID: ").append(pid)
+                .append("\nSaved target: 0x").append(Long.toHexString(lastPointerTarget).toUpperCase(Locale.US))
+                .append("\nChains: ").append(lastPointerHits.size()).append("\n\n");
+            int resolved=0;
+            for(int i=0;i<lastPointerHits.size();i++){
+                PointerHit hit=lastPointerHits.get(i);
+                out.append(i+1).append(". ").append(hit.module).append("+0x")
+                    .append(Long.toHexString(hit.baseOffset).toUpperCase(Locale.US)).append(" -> ");
+                try{
+                    Long base=moduleBases.get(hit.module);
+                    if(base==null)throw new IOException("module not mapped");
+                    long address=base+hit.baseOffset;
+                    if(hit.offsets.isEmpty())throw new IOException("empty offset chain");
+                    for(int level=0;level<hit.offsets.size();level++){
+                        if(pointerCancel)throw new IOException("cancelled");
+                        byte[] raw=client.read(pid,address,8);
+                        if(raw.length!=8)throw new IOException("short pointer read");
+                        long pointer=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                        if(pointer==0)throw new IOException("null pointer at level "+(level+1));
+                        address=pointer+hit.offsets.get(level);
+                    }
+                    out.append("0x").append(Long.toHexString(address).toUpperCase(Locale.US));
+                    if(address==lastPointerTarget)out.append("  [MATCHES SCAN TARGET]");
+                    resolved++;
+                }catch(Exception e){out.append("UNRESOLVED: ").append(e.getMessage()==null?"read failed":e.getMessage());}
+                out.append("\n");
+            }
+            out.append("\nResolved: ").append(resolved).append("/").append(lastPointerHits.size());
+            return out.toString();
+        },value->{pointerResult.setText(value);log("Pointer chain live resolution completed.");});
     }
 
     private static boolean isPointerModule(MapEntry m){
