@@ -1199,7 +1199,9 @@ public class MainActivity extends Activity {
             if(tokens.length==0||tokens.length>64)throw new IllegalArgumentException("Pattern must contain 1–64 byte tokens.");
             byte[] pattern=new byte[tokens.length];boolean[] mask=new boolean[tokens.length];
             for(int k=0;k<tokens.length;k++){String token=tokens[k].trim();if(token.equals("?")||token.equals("??")){mask[k]=false;pattern[k]=0;}else{if(!token.matches("(?i)[0-9a-f]{2}"))throw new IllegalArgumentException("Use two-digit hex bytes or ?? wildcards.");pattern[k]=(byte)Integer.parseInt(token,16);mask[k]=true;}}
-            boolean wildcard=false;for(boolean fixed:mask)if(!fixed){wildcard=true;break;}
+            int anchor=-1;
+            for(int k=0;k<mask.length;k++)if(mask[k]){anchor=k;break;}
+            if(anchor<0)throw new IllegalArgumentException("Pattern cannot contain only wildcards; include at least one fixed byte.");
             if (length <= 0 || length > SCAN_MAX) throw new IllegalArgumentException("Scan range must be between 1 byte and 16 MiB.");
             List<Long> matches = new ArrayList<>();
             int chunkSize = 64 * 1024;
@@ -1213,8 +1215,13 @@ public class MainActivity extends Activity {
                 System.arraycopy(block, 0, combined, tail.length, block.length);
                 long combinedBase = start + scanned - tail.length;
                 for (int i = 0; i <= combined.length - pattern.length; i++) {
+                    // Check one fixed anchor byte first; most non-matches can skip the
+                    // remaining wildcard-aware comparisons, improving large-range scans.
+                    if (combined[i + anchor] != pattern[anchor]) continue;
                     boolean same = true;
-                    for (int j = 0; j < pattern.length; j++) if (mask[j] && combined[i+j] != pattern[j]) { same = false; break; }
+                    for (int j = 0; j < pattern.length; j++) {
+                        if (mask[j] && combined[i+j] != pattern[j]) { same = false; break; }
+                    }
                     if (same) {
                         long at = combinedBase + i;
                         if (at >= start + scanned - tail.length) matches.add(at);
