@@ -2135,7 +2135,9 @@ public class MainActivity extends Activity {
         if (!enabledCheats.isEmpty()) { toast("Restore active cheats before editing."); return; }
         JSONArray steps = cheat.optJSONArray("steps");
         if (steps == null) steps = new JSONArray();
-        final JSONArray working = new JSONArray(steps.toString());
+        final JSONArray working;
+        try { working = new JSONArray(steps.toString()); }
+        catch (JSONException e) { toast("Could not copy cheat steps: " + e.getMessage()); return; }
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(12), dp(8), dp(12), dp(8));
