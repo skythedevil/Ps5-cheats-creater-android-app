@@ -2940,6 +2940,18 @@ public class MainActivity extends Activity {
         for(int i=0;i<steps.length();i++){
             JSONObject step=steps.optJSONObject(i);if(step==null)throw new IllegalArgumentException("Nested step "+(i+1)+" must be an object.");
             String op=step.optString("op","").toLowerCase(Locale.US);
+            if("log".equals(op)){
+                String message=step.optString("text",step.optString("message",""));
+                stepOutput.add("LOG: "+message);
+                continue;
+            }
+            if("sleep".equals(op)){
+                int delay=step.optInt("ms",100);
+                if(delay<0||delay>60000)throw new IllegalArgumentException("Sleep step must be 0–60000 ms.");
+                if(delay>0)Thread.sleep(delay);
+                stepOutput.add("WAIT: "+delay+" ms");
+                continue;
+            }
             if("repeat".equals(op)){
                 int count=step.optInt("count",1),delay=step.optInt("delay_ms",0);JSONArray children=step.optJSONArray("steps");
                 if(count<1||count>1000||delay<0||delay>60000||children==null||children.length()==0)throw new IllegalArgumentException("Nested repeat "+(i+1)+" has invalid count, delay or children.");
@@ -3111,10 +3123,16 @@ public class MainActivity extends Activity {
                 throw new IllegalArgumentException("Supported steps: patch, write, check, read, nop, code and repeat. Unsupported step: "+op);
             long address=resolveAddress(step.getString("addr"),processId);
             if("read".equals(op)){
-                int length=step.optInt("length",step.optInt("size",0));
-                if(length<1||length>4096)throw new IllegalArgumentException("Read step length must be 1–4096 bytes.");
+                String readType=step.optString("type",step.has("length")||step.has("size")?"hex":"u32").toLowerCase(Locale.US);
+                int typeIndex=cheatReadTypeIndex(readType);
+                int length;
+                if(typeIndex<0){
+                    length=step.optInt("length",step.optInt("size",0));
+                    if(length<1||length>4096)throw new IllegalArgumentException("Hex read step length must be 1–4096 bytes.");
+                }else length=typeIndex==1||typeIndex==2?1:typeIndex==3||typeIndex==4?2:typeIndex==5||typeIndex==6||typeIndex==9?4:8;
                 byte[] observed=client.read(processId,address,length);
-                stepOutput.add("READ 0x"+Long.toHexString(address).toUpperCase(Locale.US)+" ["+length+"]: "+toHex(observed));
+                String decoded=typeIndex<0?toHex(observed):decodeAddressValue(typeIndex,observed);
+                stepOutput.add("READ 0x"+Long.toHexString(address).toUpperCase(Locale.US)+" "+readType+" = "+decoded+" ["+toHex(observed)+"]");
                 continue;
             }
             byte[] patch;
@@ -3140,6 +3158,23 @@ public class MainActivity extends Activity {
             client.write(processId,address,patch);
             byte[] written=client.read(processId,address,patch.length);
             if(!Arrays.equals(patch,written))throw new IOException("Patch read-back verification failed at 0x"+Long.toHexString(address).toUpperCase(Locale.US)+".");
+        }
+    }
+
+    private int cheatReadTypeIndex(String type){
+        switch(type){
+            case "u8":case "byte":return 1;
+            case "i8":return 2;
+            case "u16":return 3;
+            case "i16":return 4;
+            case "u32":return 5;
+            case "i32":return 6;
+            case "u64":case "ptr":return 7;
+            case "i64":return 8;
+            case "f32":case "float":return 9;
+            case "f64":case "double":return 10;
+            case "hex":case "bytes":return -1;
+            default:throw new IllegalArgumentException("Unsupported read type: "+type);
         }
     }
 
