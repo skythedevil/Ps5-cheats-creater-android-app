@@ -1712,7 +1712,11 @@ public class MainActivity extends Activity {
         byte[] cipherBytes=android.util.Base64.decode(encoded.replaceAll("\\s+",""),android.util.Base64.DEFAULT);
         Cipher cipher=Cipher.getInstance("AES/CBC/PKCS5Padding");
         cipher.init(Cipher.DECRYPT_MODE,new SecretKeySpec(MC4_KEY.getBytes(StandardCharsets.US_ASCII),"AES"),new IvParameterSpec(MC4_IV.getBytes(StandardCharsets.US_ASCII)));
-        byte[] plain=cipher.doFinal(cipherBytes);String xml=new String(plain,StandardCharsets.UTF_8).trim();
+        byte[] plain=cipher.doFinal(cipherBytes);String xml;
+        if(plain.length>=2&&(plain[0]&255)==0xFF&&(plain[1]&255)==0xFE)xml=new String(plain,2,plain.length-2,StandardCharsets.UTF_16LE).trim();
+        else if(plain.length>=2&&(plain[0]&255)==0xFE&&(plain[1]&255)==0xFF)xml=new String(plain,2,plain.length-2,StandardCharsets.UTF_16BE).trim();
+        else xml=new String(plain,StandardCharsets.UTF_8).trim();
+        if(!xml.contains("<Trainer"))xml=xml.replace("&lt;","<").replace("&gt;",">").replace("&quot;","\\\"").replace("&apos;","'");
         if(!xml.contains("<Trainer"))throw new IOException("MC4 did not decrypt to a Trainer XML document.");
         return xml;
     }
