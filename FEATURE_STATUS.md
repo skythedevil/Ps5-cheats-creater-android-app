@@ -34,7 +34,7 @@ Legend: **Implemented** = code path exists; **Partial** = limited subset only; *
 | Function logger | Pending | — | Hook generation, ring buffer, polling, caller grouping and export |
 | Code caves / hooks / assembler | Partial | Bounded executable-padding scan; x64 subset assembler; assembler writes only to verified executable padding; absolute jump hook patch/trampoline generation, guarded install and restore | Full assembler, RIP-relative relocation, instruction-boundary decoding, executable allocation and physical-console validation |
 | Cheat JSON library | Partial | Create/import/export `ps5cheat/1`; fixed hex patch steps; title-ID check; patch on/off restore | Full cheat editor, all step types, parameters, off steps, repeat, validation, groups and reorder |
-| Cheat format conversion | Partial | GoldHEN JSON import/export and SHN XML import/export for fixed section-0 / absolute hex patch lines; unsupported sections are skipped and non-patch GoldHEN export is rejected | MC4 decryption/encryption, ShnExt, ps5pack, section-aware mappings and richer step conversion |
+| Cheat format conversion | Partial | GoldHEN JSON import/export, SHN XML import/export and MC4 AES-256-CBC import/export for fixed section-0 / absolute hex patch lines; unsupported sections are skipped and non-patch GoldHEN export is rejected | ShnExt, ps5pack, section-aware mappings and richer step conversion |
 | Cheat recorder / caller | Pending | — | Record memory changes/calls into cheat steps |
 | Pointer scanner | Pending | — | Turbo pointer-scan capability, map build, chain search, resolve/rescan and persistence |
 | Python scripting | Pending | — | Sandboxed/mobile-compatible script API, saved scripts and cancellation |
