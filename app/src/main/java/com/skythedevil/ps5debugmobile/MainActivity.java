@@ -1703,13 +1703,18 @@ public class MainActivity extends Activity {
             if (requestCode == REQ_IMPORT) {
                 String json = readUri(uri);
                 JSONObject imported = new JSONObject(json);
-                if (!imported.has("game") || !imported.has("cheats")) throw new JSONException("Not a PS5 Debug Studio game cheat JSON file.");
-                gameFile = imported;
-                gameName.setText(imported.optString("game"));
-                titleId.setText(imported.optString("title_id"));
-                gameVersion.setText(imported.optString("version"));
+                if(imported.has("game")&&imported.has("cheats")&&"ps5cheat/1".equals(imported.optString("format"))) {
+                    gameFile=imported;
+                } else if(imported.has("mods")) {
+                    gameFile=convertGoldHenJson(imported);
+                } else {
+                    throw new JSONException("Unsupported JSON. Expected ps5cheat/1 or GoldHEN mods JSON.");
+                }
+                gameName.setText(gameFile.optString("game"));
+                titleId.setText(gameFile.optString("title_id"));
+                gameVersion.setText(gameFile.optString("version"));
                 refreshCheatList();
-                log("Imported " + imported.getJSONArray("cheats").length() + " cheat(s).");
+                log("Imported " + gameFile.getJSONArray("cheats").length() + " supported cheat(s).");
             } else if (requestCode == REQ_EXPORT) {
                 try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                     if (out == null) throw new IOException("Could not open destination.");
@@ -1730,6 +1735,51 @@ public class MainActivity extends Activity {
             while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
             return out.toString("UTF-8");
         }
+    }
+
+
+    private JSONObject convertGoldHenJson(JSONObject source)throws Exception{
+        JSONObject out=new JSONObject();
+        out.put("format","ps5cheat/1");
+        out.put("game",source.optString("name",source.optString("id","Imported GoldHEN game")));
+        out.put("title_id",source.optString("id","").toUpperCase(Locale.US));
+        out.put("version",source.optString("version",""));
+        out.put("process",source.optString("process","eboot.bin"));
+        out.put("notes","Imported from GoldHEN JSON. Off bytes are restored from live memory when toggled off. Non-zero sections are skipped.");
+        JSONArray cheats=new JSONArray(),mods=source.optJSONArray("mods");
+        if(mods==null)throw new JSONException("GoldHEN JSON has no mods array.");
+        int skipped=0;
+        for(int i=0;i<mods.length();i++){
+            JSONObject mod=mods.optJSONObject(i);if(mod==null)continue;
+            JSONArray memory=mod.optJSONArray("memory");if(memory==null||memory.length()==0)continue;
+            JSONArray steps=new JSONArray();
+            for(int j=0;j<memory.length();j++){
+                JSONObject mem=memory.optJSONObject(j);if(mem==null)continue;
+                String on=mem.optString("on","").trim(),offset=mem.optString("offset","").trim();
+                if(on.isEmpty()||offset.isEmpty())continue;
+                int section=mem.optInt("section",0);
+                if(section!=0){skipped++;continue;}
+                long off;
+                try{off=offset.toLowerCase(Locale.US).startsWith("0x")?Long.parseUnsignedLong(offset.substring(2),16):Long.parseUnsignedLong(offset,16);}
+                catch(Exception e){skipped++;continue;}
+                byte[] bytes;
+                try{bytes=parseHex(on);}catch(Exception e){skipped++;continue;}
+                if(bytes.length==0){skipped++;continue;}
+                boolean absolute=mem.optBoolean("absolute",false);
+                String address=absolute?"0x"+Long.toHexString(off):"module(main)+0x"+Long.toHexString(off);
+                steps.put(new JSONObject().put("op","patch").put("addr",address).put("type","hex").put("value",toHex(bytes)));
+            }
+            if(steps.length()==0)continue;
+            JSONObject cheat=new JSONObject();
+            cheat.put("name",mod.optString("name","Imported cheat "+(i+1)));
+            cheat.put("mode","toggle");
+            cheat.put("steps",steps);
+            cheats.put(cheat);
+        }
+        if(cheats.length()==0)throw new JSONException("No supported section-0 GoldHEN memory patches found.");
+        out.put("cheats",cheats);
+        if(skipped>0)out.put("conversion_warnings",skipped+" memory line(s) skipped (unsupported section or invalid offset/hex).");
+        return out;
     }
 
     private void refreshCheatList() {
