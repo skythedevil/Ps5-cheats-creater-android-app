@@ -1854,7 +1854,7 @@ public class MainActivity extends Activity {
             }else if(event==XmlPullParser.END_TAG){
                 String tag=parser.getName();
                 if("Cheatline".equalsIgnoreCase(tag)&&steps!=null&&!offset.isEmpty()&&!on.isEmpty()){
-                    int sec=0;try{sec=Integer.parseInt(section.trim());}catch(Exception ignored){}
+                    int sec=0;try{String st=section.trim();sec=st.toLowerCase(Locale.US).startsWith("0x")?Integer.parseInt(st.substring(2),16):Integer.parseInt(st);}catch(Exception ignored){}
                     if(sec==0)try{
                         long off=offset.toLowerCase(Locale.US).startsWith("0x")?Long.parseUnsignedLong(offset.substring(2),16):Long.parseUnsignedLong(offset,16);
                         byte[] bytes=parseHex(on);if(bytes.length>0){
