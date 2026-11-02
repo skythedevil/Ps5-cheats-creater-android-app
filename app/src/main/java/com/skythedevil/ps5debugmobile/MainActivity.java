@@ -2100,7 +2100,8 @@ public class MainActivity extends Activity {
             primaryActions.setOrientation(LinearLayout.HORIZONTAL);
             LinearLayout orderActions = new LinearLayout(this);
             orderActions.setOrientation(LinearLayout.HORIZONTAL);
-            Button apply = button(enabledCheats.containsKey(idx) ? "RESTORE" : "APPLY", ACCENT);
+            boolean runOnce = "once".equalsIgnoreCase(c.optString("mode", "toggle"));
+            Button apply = button(enabledCheats.containsKey(idx) ? "RESTORE" : (runOnce ? "RUN ONCE" : "APPLY"), ACCENT);
             apply.setEnabled(enabledCheats.containsKey(idx) || c.optBoolean("enabled", true));
             available.setEnabled(!enabledCheats.containsKey(idx));
             available.setOnCheckedChangeListener((view, checked) -> {
@@ -2211,9 +2212,13 @@ public class MainActivity extends Activity {
                 try {
                     JSONObject updated = new JSONObject(editor.getText().toString());
                     String name = updated.optString("name", "").trim();
+                    String mode = updated.optString("mode", "toggle").trim().toLowerCase(Locale.US);
                     JSONArray steps = updated.optJSONArray("steps");
                     if (name.isEmpty() || steps == null || steps.length() == 0)
                         throw new IllegalArgumentException("Cheat needs a name and at least one step.");
+                    if (!mode.equals("toggle") && !mode.equals("once"))
+                        throw new IllegalArgumentException("Cheat mode must be 'toggle' or 'once'.");
+                    updated.put("mode", mode);
                     for (int n = 0; n < steps.length(); n++) {
                         JSONObject step = steps.optJSONObject(n);
                         if (step == null || step.optString("op", "").trim().isEmpty())
@@ -2447,8 +2452,9 @@ public class MainActivity extends Activity {
                 }
                 throw applyFailure;
             }
-            enabledCheats.put(index, undo);
-            return "Applied " + cheat.optString("name") + ".";
+            boolean runOnce = "once".equalsIgnoreCase(cheat.optString("mode", "toggle"));
+            if (!runOnce) enabledCheats.put(index, undo);
+            return (runOnce ? "Ran " : "Applied ") + cheat.optString("name") + (runOnce ? " once." : ".");
         }, result -> {
             log(result);
             refreshCheatList();
