@@ -738,7 +738,7 @@ public class MainActivity extends Activity {
                 hexTypedResult.setText(String.format(Locale.US, "Address: 0x%X\\nOffset: %d\\nUTF-8: %s\\nBytes: %d", hexEditorBase + offset, offset, value, end));
                 return;
             }
-            int size = type <= 1 ? 1 : type <= 3 ? 2 : type <= 7 ? 4 : 8;
+            int size = type <= 1 ? 1 : type <= 3 ? 2 : (type <= 5 || type == 8) ? 4 : 8;
             if (offset + size > data.length) throw new IllegalArgumentException("Not enough bytes remain for this type.");
             ByteBuffer b = ByteBuffer.wrap(data, offset, size).order(ByteOrder.LITTLE_ENDIAN);
             String value;
