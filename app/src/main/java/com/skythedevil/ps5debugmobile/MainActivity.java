@@ -74,8 +74,10 @@ public class MainActivity extends Activity {
     private volatile boolean debugEventListening=false;
     private ServerSocket debugEventServer;
     private final ExecutorService debugEventWorker=Executors.newSingleThreadExecutor();
-    private EditText asmAddress,asmSource,hookTarget,hookDetour,hookOriginal,hookLength;
+    private EditText asmAddress,asmSource,hookTarget,hookDetour,hookOriginal,hookLength,hookCaveAddress;
     private TextView asmResult,hookResult;
+    private byte[] generatedHookPatch=new byte[0],generatedHookTrampoline=new byte[0],generatedHookOriginal=new byte[0];
+    private long generatedHookSite=0;
     private EditText caveMinSize,caveMaxMiB;
     private TextView caveResult;
     private Spinner processSpinner;
@@ -347,13 +349,18 @@ public class MainActivity extends Activity {
         hookDetour=field("Detour address","0x0");
         hookLength=field("Stolen whole-instruction length (14–64 bytes)","14");
         hookOriginal=field("Original bytes at hook site (hex)","");
+        hookCaveAddress=field("Executable cave address for trampoline","0x0");
         hookOriginal.setSingleLine(false);hookOriginal.setMinLines(2);hookOriginal.setGravity(Gravity.TOP|Gravity.START);
-        page.addView(hookTarget);page.addView(hookDetour);page.addView(hookLength);page.addView(hookOriginal);
+        page.addView(hookTarget);page.addView(hookDetour);page.addView(hookLength);page.addView(hookOriginal);page.addView(hookCaveAddress);
         Button hookBuild=button("GENERATE HOOK PATCH + TRAMPOLINE",PANEL);page.addView(hookBuild);
+        Button hookInstall=button("WRITE TRAMPOLINE + APPLY HOOK (VERIFY)",ACCENT);page.addView(hookInstall);
+        Button hookRestore=button("RESTORE ORIGINAL HOOK-SITE BYTES",PANEL);page.addView(hookRestore);
         hookResult=text("No hook generated. This helper does not write memory.",11,MUTED,false);
         hookResult.setTypeface(Typeface.MONOSPACE);hookResult.setTextIsSelectable(true);page.addView(hookResult);
         asmBuild.setOnClickListener(v->assembleMiniUi());
         hookBuild.setOnClickListener(v->buildAbsoluteHook());
+        hookInstall.setOnClickListener(v->installGeneratedHook());
+        hookRestore.setOnClickListener(v->restoreGeneratedHook());
 
         section(page, "06  DEBUGGER", "Attach/detach, software breakpoints, hardware watchpoints, thread listing and register inspection. Full async stepping/event UI is still pending.");
         breakpointIndex = field("Breakpoint slot (0–29)", "0");
@@ -715,6 +722,38 @@ public class MainActivity extends Activity {
 
 
 
+
+    private void installGeneratedHook(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        if(generatedHookPatch.length==0||generatedHookTrampoline.length==0){toast("Generate a hook first.");return;}
+        final long cave;
+        try{cave=resolveAddress(hookCaveAddress.getText().toString().trim(),currentPid());}
+        catch(Exception e){toast("Invalid executable cave address: "+e.getMessage());return;}
+        runAsync("Installing hook with verification",()->{
+            int p=currentPid();
+            client.write(p,cave,generatedHookTrampoline);
+            byte[] caveCheck=client.read(p,cave,generatedHookTrampoline.length);
+            if(!Arrays.equals(caveCheck,generatedHookTrampoline))throw new IOException("Trampoline read-back mismatch; hook site was not modified.");
+            client.write(p,generatedHookSite,generatedHookPatch);
+            byte[] patchCheck=client.read(p,generatedHookSite,generatedHookPatch.length);
+            if(!Arrays.equals(patchCheck,generatedHookPatch)){
+                client.write(p,generatedHookSite,generatedHookOriginal);
+                throw new IOException("Hook patch read-back mismatch; original bytes were restored.");
+            }
+            return "Trampoline written and hook patch verified.\\nCave: 0x"+Long.toHexString(cave).toUpperCase(Locale.US)+"\\nHook: 0x"+Long.toHexString(generatedHookSite).toUpperCase(Locale.US);
+        },hookResult::setText);
+    }
+    private void restoreGeneratedHook(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        if(generatedHookOriginal.length==0){toast("Generate a hook first; original bytes are not cached.");return;}
+        runAsync("Restoring original hook bytes",()->{
+            int p=currentPid();client.write(p,generatedHookSite,generatedHookOriginal);
+            byte[] check=client.read(p,generatedHookSite,generatedHookOriginal.length);
+            if(!Arrays.equals(check,generatedHookOriginal))throw new IOException("Restore read-back mismatch.");
+            return "Original hook-site bytes restored and verified. Trampoline cave was left untouched.";
+        },hookResult::setText);
+    }
+
     private void assembleMiniUi(){
         try{
             long base=parseAddress(asmAddress.getText().toString());
@@ -775,10 +814,11 @@ public class MainActivity extends Activity {
             byte[] padded=Arrays.copyOf(patch,length);Arrays.fill(padded,patch.length,length,(byte)0x90);
             byte[] trampoline=new byte[length+14];System.arraycopy(original,0,trampoline,0,length);
             byte[] back=absoluteJump(site+length);System.arraycopy(back,0,trampoline,length,back.length);
+            generatedHookPatch=padded;generatedHookTrampoline=trampoline;generatedHookOriginal=original.clone();generatedHookSite=site;
             hookResult.setText("HOOK SITE: 0x"+Long.toHexString(site).toUpperCase(Locale.US)+"\\nDETOUR: 0x"+Long.toHexString(detour).toUpperCase(Locale.US)
                 +"\\nStolen bytes: "+length+"\\n\\nPATCH (write at hook site):\\n"+toHex(padded)
                 +"\\n\\nTRAMPOLINE (place in executable cave):\\n"+toHex(trampoline)
-                +"\\n\\nWARNING: supplied original bytes must end on whole instruction boundaries. Allocate executable memory and validate the trampoline before enabling.");
+                +"\\n\\nWARNING: supplied original bytes must end on whole instruction boundaries. RIP-relative instructions and relative branches are not relocated. Use a verified executable cave.");
         }catch(Exception e){hookResult.setText("Hook builder error: "+e.getMessage());}
     }
     private static byte[] absoluteJump(long target){
