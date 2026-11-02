@@ -32,6 +32,7 @@ public class MainActivity extends Activity {
     private static final int SCAN_MAX = 16 * 1024 * 1024;
     private static final int REQ_IMPORT = 21;
     private static final int REQ_EXPORT = 22;
+    private static final int REQ_EXPORT_GOLDHEN = 23;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -436,11 +437,13 @@ public class MainActivity extends Activity {
         fileButtons.setOrientation(LinearLayout.HORIZONTAL);
         Button importFile = button("IMPORT JSON", PANEL);
         Button exportFile = button("EXPORT JSON", PANEL);
+        Button exportGoldHenFile=button("EXPORT GOLDHEN",PANEL);
         fileButtons.addView(importFile, new LinearLayout.LayoutParams(0, dp(48), 1));
         LinearLayout.LayoutParams right = new LinearLayout.LayoutParams(0, dp(48), 1);
         right.setMargins(dp(8), 0, 0, 0);
         fileButtons.addView(exportFile, right);
         page.addView(fileButtons);
+        page.addView(exportGoldHenFile);
         cheatStatus = text("No game file loaded.", 12, MUTED, false);
         cheatStatus.setPadding(0, dp(10), 0, dp(6));
         page.addView(cheatStatus);
@@ -451,6 +454,7 @@ public class MainActivity extends Activity {
         addPatch.setOnClickListener(v -> addPatchCheat());
         importFile.setOnClickListener(v -> importJson());
         exportFile.setOnClickListener(v -> exportJson());
+        exportGoldHenFile.setOnClickListener(v->exportGoldHenJson());
 
         section(page, "08  ACTIVITY LOG", "Recent connection and operation results.");
         logView = text("Ready.", 11, MUTED, false);
@@ -1685,6 +1689,43 @@ public class MainActivity extends Activity {
         startActivityForResult(i, REQ_IMPORT);
     }
 
+
+    private void exportGoldHenJson(){
+        if(gameFile==null){toast("Create or import a game file first.");return;}
+        Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("application/json");
+        String id=gameFile.optString("title_id","PS5");i.putExtra(Intent.EXTRA_TITLE,(id.isEmpty()?"PS5-game":id)+"_GoldHEN.json");
+        startActivityForResult(i,REQ_EXPORT_GOLDHEN);
+    }
+    private JSONObject buildGoldHenJson()throws Exception{
+        JSONObject out=new JSONObject();out.put("name",gameFile.optString("game","game"));out.put("id",gameFile.optString("title_id",""));
+        out.put("version",gameFile.optString("version",""));out.put("process",gameFile.optString("process","eboot.bin"));
+        JSONArray mods=new JSONArray(),cheats=gameFile.optJSONArray("cheats");
+        if(cheats==null)throw new IOException("Game file has no cheats array.");
+        for(int i=0;i<cheats.length();i++){
+            JSONObject cheat=cheats.getJSONObject(i);JSONArray steps=cheat.optJSONArray("steps");
+            if(steps==null||steps.length()==0)throw new IOException("Cannot export '"+cheat.optString("name")+"': no steps.");
+            JSONArray memory=new JSONArray();
+            for(int j=0;j<steps.length();j++){
+                JSONObject step=steps.getJSONObject(j);
+                if(!"patch".equalsIgnoreCase(step.optString("op"))||!"hex".equalsIgnoreCase(step.optString("type","hex")))
+                    throw new IOException("Cannot export '"+cheat.optString("name")+"': only fixed hex patch steps are supported.");
+                String addr=step.optString("addr","").trim();long off;boolean absolute=false;
+                if(addr.matches("(?i)0x[0-9a-f]+")){off=Long.parseUnsignedLong(addr.substring(2),16);absolute=true;}
+                else{
+                    java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?i)^module\\((main|eboot\\.bin|executable)\\)\\s*\\+\\s*(0x[0-9a-f]+|[0-9]+)$").matcher(addr);
+                    if(!m.matches())throw new IOException("Cannot export '"+cheat.optString("name")+"': address is not a fixed main-module offset ("+addr+").");
+                    String v=m.group(2);off=v.toLowerCase(Locale.US).startsWith("0x")?Long.parseUnsignedLong(v.substring(2),16):Long.parseUnsignedLong(v);
+                }
+                byte[] bytes=parseHex(step.optString("value",""));if(bytes.length==0)throw new IOException("Empty patch in '"+cheat.optString("name")+"'.");
+                JSONObject line=new JSONObject().put("offset",Long.toHexString(off).toUpperCase(Locale.US)).put("on",toHex(bytes));
+                if(absolute)line.put("absolute",true);
+                memory.put(line);
+            }
+            mods.put(new JSONObject().put("name",cheat.optString("name","Cheat")).put("type","checkbox").put("memory",memory));
+        }
+        out.put("mods",mods);out.put("credits",new JSONArray());return out;
+    }
+
     private void exportJson() {
         if (gameFile == null) { toast("Create or import a game file first."); return; }
         String id = gameFile.optString("title_id", "PS5");
@@ -1715,7 +1756,7 @@ public class MainActivity extends Activity {
                 gameVersion.setText(gameFile.optString("version"));
                 refreshCheatList();
                 log("Imported " + gameFile.getJSONArray("cheats").length() + " supported cheat(s).");
-            } else if (requestCode == REQ_EXPORT) {
+            } else if (requestCode == REQ_EXPORT_GOLDHEN) {\n                JSONObject goldhen=buildGoldHenJson();\n                try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IOException("Could not open destination.");out.write(goldhen.toString(2).getBytes(StandardCharsets.UTF_8));}\n                log("Exported GoldHEN JSON.");\n            } else if (requestCode == REQ_EXPORT) {
                 try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                     if (out == null) throw new IOException("Could not open destination.");
                     out.write(gameFile.toString(2).getBytes(StandardCharsets.UTF_8));
