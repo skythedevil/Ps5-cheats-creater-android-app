@@ -2426,21 +2426,7 @@ public class MainActivity extends Activity {
             JSONArray steps = cheat.optJSONArray("steps");
             if (steps == null) throw new IllegalArgumentException("Cheat has no steps.");
             try {
-                for (int n = 0; n < steps.length(); n++) {
-                    JSONObject step = steps.getJSONObject(n);
-                    String op = step.optString("op", "").toLowerCase(Locale.US);
-                    if (!op.equals("patch")) throw new IllegalArgumentException("V1 mobile supports fixed 'patch' steps only. Unsupported step: " + op);
-                    long address = resolveAddress(step.getString("addr"), p);
-                    byte[] patch = encodeCheatValue(step.optString("type", "hex"), step.optString("value", ""), step.optBoolean("nul", false));
-                    if (patch.length == 0) throw new IllegalArgumentException("Empty patch step.");
-                    byte[] old = client.read(p, address, patch.length);
-                    // Record original bytes before writing so a partial transport failure can roll back.
-                    undo.add(new UndoPatch(address, old));
-                    client.write(p, address, patch);
-                    byte[] written = client.read(p, address, patch.length);
-                    if (!Arrays.equals(patch, written))
-                        throw new IOException("Patch read-back verification failed at 0x" + Long.toHexString(address).toUpperCase(Locale.US) + ".");
-                }
+                applyPatchSteps(p, steps, undo, 0);
             } catch (Exception applyFailure) {
                 Collections.reverse(undo);
                 for (UndoPatch u : undo) {
@@ -2460,6 +2446,36 @@ public class MainActivity extends Activity {
             log(result);
             refreshCheatList();
         });
+    }
+
+    private void applyPatchSteps(int processId, JSONArray steps, List<UndoPatch> undo, int depth) throws Exception {
+        if(depth>8)throw new IllegalArgumentException("Repeat steps are nested too deeply (maximum 8 levels).");
+        for(int i=0;i<steps.length();i++){
+            JSONObject step=steps.optJSONObject(i);
+            if(step==null)throw new IllegalArgumentException("Step "+(i+1)+" is not a JSON object.");
+            String op=step.optString("op","").toLowerCase(Locale.US);
+            if("repeat".equals(op)){
+                int count=step.optInt("count",1),delay=step.optInt("delay_ms",0);
+                JSONArray nested=step.optJSONArray("steps");
+                if(count<1||count>1000)throw new IllegalArgumentException("Repeat count must be between 1 and 1000.");
+                if(delay<0||delay>60000)throw new IllegalArgumentException("Repeat delay must be between 0 and 60000 ms.");
+                if(nested==null||nested.length()==0)throw new IllegalArgumentException("Repeat step "+(i+1)+" needs nested steps.");
+                for(int n=0;n<count;n++){
+                    applyPatchSteps(processId,nested,undo,depth+1);
+                    if(delay>0&&n<count-1)Thread.sleep(delay);
+                }
+                continue;
+            }
+            if(!"patch".equals(op))throw new IllegalArgumentException("V1 mobile supports patch steps and repeat groups containing patch steps only. Unsupported step: "+op);
+            long address=resolveAddress(step.getString("addr"),processId);
+            byte[] patch=encodeCheatValue(step.optString("type","hex"),step.optString("value",""),step.optBoolean("nul",false));
+            if(patch.length==0)throw new IllegalArgumentException("Empty patch step.");
+            byte[] original=client.read(processId,address,patch.length);
+            undo.add(new UndoPatch(address,original));
+            client.write(processId,address,patch);
+            byte[] written=client.read(processId,address,patch.length);
+            if(!Arrays.equals(patch,written))throw new IOException("Patch read-back verification failed at 0x"+Long.toHexString(address).toUpperCase(Locale.US)+".");
+        }
     }
 
     private void runOffPatchSteps(int processId, JSONObject cheat) throws Exception {
