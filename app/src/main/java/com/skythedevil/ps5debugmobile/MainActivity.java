@@ -1895,7 +1895,8 @@ public class MainActivity extends Activity {
                 JSONObject mem=memory.optJSONObject(j);if(mem==null)continue;
                 String on=mem.optString("on","").trim(),offset=mem.optString("offset","").trim();
                 if(on.isEmpty()||offset.isEmpty())continue;
-                int section=mem.optInt("section",0);
+                String sectionText=mem.optString("section","0").trim();int section=0;
+                try{section=sectionText.toLowerCase(Locale.US).startsWith("0x")?Integer.parseInt(sectionText.substring(2),16):Integer.parseInt(sectionText);}catch(Exception ignored){}
                 if(section!=0){skipped++;continue;}
                 long off;
                 try{off=offset.toLowerCase(Locale.US).startsWith("0x")?Long.parseUnsignedLong(offset.substring(2),16):Long.parseUnsignedLong(offset,16);}
