@@ -19,7 +19,7 @@ Reference: https://github.com/alfizari/PS5Debug-studio/tree/V1.5
 - [ ] Turbo scan resident/snapshot modes, segmented scans, count/get paging, cancellation on a separate connection.
 - [ ] Scan range, writable/code filters, alignment, zero handling, region classification, aliasing/read-engine options.
 - [ ] Results paging, live value refresh, previous/first values, selection and multi-selection.
-- [ ] Address list: add/edit/delete, type change, freeze/unfreeze, bulk freeze writes, save/load tables, copy as cheat.
+- [ ] Address list: add/edit/delete, type change, freeze/unfreeze, bulk freeze writes, save/load tables, copy as cheat. (Found TurboScan results can be edited with read-back verification and saved to the address table.)
 
 ## Memory inspection and code tools
 - [x] Hex editor: bounded paged byte view, editable hex buffer, page navigation, write/read-back verification and restore-original snapshot.
@@ -48,7 +48,7 @@ Reference: https://github.com/alfizari/PS5Debug-studio/tree/V1.5
 
 ## Cheats, projects and exports
 - [ ] Multi-game library, game metadata, title ID/version/content ID/process fields.
-- [ ] Cheat editor: create, rename, duplicate, enable/disable, delete, reorder and edit steps. (Delete, reorder and full JSON-object editing are implemented; structured editor, duplicate and enable/disable persistence remain.)
+- [ ] Cheat editor: create, rename, duplicate, enable/disable, delete, reorder and edit steps. (Delete, reorder, duplicate and full JSON-object editing are implemented; the game/cheat library is auto-saved locally and restored on launch. A native structured step editor and persisted per-cheat enabled state remain.)
 - [ ] Full step engine: write, patch, asmpatch, alloc, code, hook, aob, call, read, set, check, python and every additional step in V1.5 source.
 - [ ] Toggle/run modes, inputs, item ID lists, validation/check-and-fix, undo restoration and turn-all-off.
 - [ ] Record cheat from Caller; add/update call steps with required buffers, variables and inputs.
