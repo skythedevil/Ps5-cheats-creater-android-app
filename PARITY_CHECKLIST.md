@@ -15,7 +15,7 @@ Reference: https://github.com/alfizari/PS5Debug-studio/tree/V1.5
 
 ## Scanner and address list
 - [ ] First/next scans: exact, bigger, smaller, between, unknown initial, increased, decreased, changed, unchanged, increased/decreased by.
-- [ ] Value types: byte, signed/unsigned 2/4/8 byte, float, double, UTF-8/UTF-16 string, AOB with wildcards.
+- [ ] Value types: byte, signed/unsigned 2/4/8 byte, float, double, UTF-8/UTF-16 string, AOB with wildcards. (The fallback exact-byte AOB scanner now has an anchor-byte prefilter, rejects all-wildcard patterns, and supports cancellation with partial results.)
 - [ ] Turbo scan resident/snapshot modes, segmented scans, count/get paging, cancellation on a separate connection.
 - [ ] Scan range, writable/code filters, alignment, zero handling, region classification, aliasing/read-engine options.
 - [ ] Results paging, live value refresh, previous/first values, selection and multi-selection.
