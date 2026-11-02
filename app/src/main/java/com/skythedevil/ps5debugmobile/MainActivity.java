@@ -2346,7 +2346,7 @@ public class MainActivity extends Activity {
         EditText address = new EditText(this); address.setSingleLine(true); address.setHint("Address / expression"); address.setText(draft.optString("addr", "")); fields.addView(address);
         EditText value = new EditText(this); value.setSingleLine(true); value.setHint("Value (hex for patch)"); value.setText(draft.optString("value", "")); fields.addView(value);
         new android.app.AlertDialog.Builder(this).setTitle(isNew ? "Add cheat step" : "Edit cheat step")
-            .setMessage("For patch steps, enter an address and valid hex bytes. Other step types are retained for library editing but may not be executable by this mobile build.")
+            .setMessage("For patch steps, enter an address and a value matching its type (hex, integer, float, or UTF text). Other operation types are retained for library editing but are not executable by this mobile build.")
             .setView(fields).setNegativeButton("CANCEL", null).setPositiveButton("SAVE", (d, w) -> {
                 try {
                     String operation = op.getText().toString().trim();
