@@ -1368,7 +1368,7 @@ public class MainActivity extends Activity {
             actions.addView(save,new LinearLayout.LayoutParams(0,dp(48),1));
             row.addView(actions);
             refresh.setOnClickListener(v->refreshTurboResult(item,label,refresh));
-            edit.setOnClickListener(v->editTurboResult(item.address,item.current));
+            edit.setOnClickListener(v->editTurboResult(item,label));
             save.setOnClickListener(v->saveTurboResultToAddressTable(item));
         }
     }
@@ -1393,12 +1393,27 @@ public class MainActivity extends Activity {
         log("Saved scan result to address table: "+address);
         toast("Saved to address table. You can now read, edit, freeze or remove it.");
     }
-    private void editTurboResult(long address,byte[] current) {
+    private void editTurboResult(PS5Client.TurboResult item, TextView label) {
         if(!connected){toast("Connect to the PS5 first.");return;}
+        final long address=item.address;
+        final byte[] current=item.current.clone();
         EditText value=new EditText(this);value.setSingleLine(true);value.setText(toHex(current));value.setTextColor(TEXT);value.setHintTextColor(MUTED);
-        new android.app.AlertDialog.Builder(this).setTitle("Edit memory at 0x"+Long.toHexString(address).toUpperCase(Locale.US)).setMessage("Enter exactly "+current.length+" byte(s) in hexadecimal.").setView(value).setNegativeButton("Cancel",null).setPositiveButton("WRITE",(d,w)->{
-            try {byte[] patch=parseHex(value.getText().toString());if(patch.length!=current.length)throw new IllegalArgumentException("New value must be exactly "+current.length+" byte(s).");
-                runAsync("Editing found memory value",()->{client.write(currentPid(),address,patch);return "Updated memory at 0x"+Long.toHexString(address).toUpperCase(Locale.US);},result->{log(result);});
+        value.setTypeface(Typeface.MONOSPACE);
+        new android.app.AlertDialog.Builder(this).setTitle("Edit memory at 0x"+Long.toHexString(address).toUpperCase(Locale.US)).setMessage("Enter exactly "+current.length+" byte(s) in hexadecimal. The write will be read back and verified.").setView(value).setNegativeButton("Cancel",null).setPositiveButton("WRITE",(d,w)->{
+            try {
+                byte[] patch=parseHex(value.getText().toString());
+                if(patch.length!=current.length)throw new IllegalArgumentException("New value must be exactly "+current.length+" byte(s).");
+                runAsync("Editing found memory value",()->{
+                    int processId=currentPid();
+                    client.write(processId,address,patch);
+                    byte[] actual=client.read(processId,address,patch.length);
+                    if(!Arrays.equals(actual,patch))throw new IOException("Read-back verification failed. Expected "+toHex(patch)+" but read "+toHex(actual)+".");
+                    return "Updated and verified memory at 0x"+Long.toHexString(address).toUpperCase(Locale.US);
+                },result->{
+                    item.current=patch.clone();
+                    label.setText(String.format(Locale.US,"0x%016X\\nCurrent: %s\\nPrevious: %s",item.address,toHex(item.current),toHex(item.previous)));
+                    log(result);
+                });
             } catch(Exception e){toast(e.getMessage());}
         }).show();
     }
