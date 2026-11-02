@@ -773,9 +773,15 @@ public class MainActivity extends Activity {
             if(caveRegion==null)throw new IOException("Trampoline address is not fully inside one executable memory region.");
             byte[] caveBefore=client.read(p,cave,generatedHookTrampoline.length);
             for(byte v:caveBefore){int x=v&255;if(x!=0x00&&x!=0x90&&x!=0xCC)throw new IOException("Selected executable cave contains non-padding bytes; refusing to overwrite it.");}
-            client.write(p,cave,generatedHookTrampoline);
-            byte[] caveCheck=client.read(p,cave,generatedHookTrampoline.length);
-            if(!Arrays.equals(caveCheck,generatedHookTrampoline))throw new IOException("Trampoline read-back mismatch; hook site was not modified.");
+            try{
+                client.write(p,cave,generatedHookTrampoline);
+                byte[] caveCheck=client.read(p,cave,generatedHookTrampoline.length);
+                if(!Arrays.equals(caveCheck,generatedHookTrampoline))throw new IOException("Trampoline read-back mismatch.");
+            }catch(Exception caveError){
+                try{client.write(p,cave,caveBefore);byte[] restoredCave=client.read(p,cave,caveBefore.length);if(!Arrays.equals(restoredCave,caveBefore))throw new IOException("cave restore mismatch");}
+                catch(Exception restoreCave){throw new IOException("Trampoline write failed and cave rollback failed: "+restoreCave.getMessage(),caveError);}
+                throw new IOException("Trampoline write failed; original cave bytes restored: "+caveError.getMessage(),caveError);
+            }
             generatedHookCaveOriginal=caveBefore;generatedHookCave=cave;
             try{
                 client.write(p,generatedHookSite,generatedHookPatch);
@@ -785,7 +791,10 @@ public class MainActivity extends Activity {
                 try{
                     client.write(p,generatedHookSite,generatedHookOriginal);
                     byte[] restored=client.read(p,generatedHookSite,generatedHookOriginal.length);
-                    if(!Arrays.equals(restored,generatedHookOriginal))throw new IOException("restore verification mismatch");
+                    if(!Arrays.equals(restored,generatedHookOriginal))throw new IOException("hook-site restore verification mismatch");
+                    client.write(p,cave,caveBefore);
+                    byte[] restoredCave=client.read(p,cave,caveBefore.length);
+                    if(!Arrays.equals(restoredCave,caveBefore))throw new IOException("cave restore verification mismatch");
                 }catch(Exception restoreError){
                     throw new IOException("Hook install failed ("+installError.getMessage()+") and automatic restore failed ("+restoreError.getMessage()+"). Inspect hook-site memory immediately.",installError);
                 }
