@@ -64,6 +64,9 @@ public class MainActivity extends Activity {
     private volatile boolean pointerCancel=false;
     private EditText hexEditorInput;
     private TextView hexEditorInfo;
+    private EditText hexTypedOffset;
+    private Spinner hexTypedType;
+    private TextView hexTypedResult;
     private byte[] hexEditorOriginal = new byte[0];
     private long hexEditorBase = 0;
     private EditText turboValue, turboResultStart, turboResultCount;
@@ -220,6 +223,18 @@ public class MainActivity extends Activity {
         hexNext.setOnClickListener(v -> moveHexEditorPage(1));
         hexWrite.setOnClickListener(v -> writeHexEditorPage(false));
         hexRestore.setOnClickListener(v -> writeHexEditorPage(true));
+
+        section(page, "03A1  TYPED VALUE INSPECTOR", "Interpret bytes at an offset in the loaded or edited hex page. This is read-only; use WRITE + VERIFY to commit edits.");
+        hexTypedOffset=field("Byte offset from page start", "0");
+        hexTypedType=new Spinner(this);
+        String[] hexTypes={"Byte unsigned","Byte signed","2-byte unsigned","2-byte signed","4-byte unsigned","4-byte signed","8-byte unsigned","8-byte signed","Float","Double","UTF-8 (remaining page)"};
+        hexTypedType.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,hexTypes));
+        page.addView(hexTypedOffset); page.addView(hexTypedType);
+        Button inspectTyped=button("INSPECT TYPED VALUE",PANEL);
+        page.addView(inspectTyped);
+        hexTypedResult=text("Load a page, choose an offset and type, then inspect.",12,MUTED,false);
+        hexTypedResult.setTypeface(Typeface.MONOSPACE); page.addView(hexTypedResult);
+        inspectTyped.setOnClickListener(v->inspectHexTypedValue());
 
         section(page, "03C  POINTER SCANNER", "Build a bounded pointer map from readable regions (module regions prioritized), then search multi-level chains back to module memory.");
         pointerTarget=field("Target address", "0x0");
@@ -707,6 +722,41 @@ public class MainActivity extends Activity {
             hexEditorInfo.setText(String.format(Locale.US, "Loaded %d bytes at 0x%X  •  Edit hex bytes, then WRITE + VERIFY.", page.data.length, page.address));
             memoryResult.setText("0x" + Long.toHexString(page.address).toUpperCase(Locale.US) + "\n" + hexDump(page.data, page.address));
         });
+    }
+
+    private void inspectHexTypedValue() {
+        if (hexEditorOriginal.length == 0) { toast("Load a memory page first."); return; }
+        try {
+            byte[] data = parseHex(hexEditorInput.getText().toString());
+            int offset = Integer.parseInt(hexTypedOffset.getText().toString().trim());
+            if (offset < 0 || offset >= data.length) throw new IllegalArgumentException("Offset must be inside the loaded page.");
+            int type = hexTypedType.getSelectedItemPosition();
+            if (type == 10) {
+                byte[] tail = Arrays.copyOfRange(data, offset, data.length);
+                int end = 0; while (end < tail.length && tail[end] != 0) end++;
+                String value = new String(tail, 0, end, StandardCharsets.UTF_8);
+                hexTypedResult.setText(String.format(Locale.US, "Address: 0x%X\\nOffset: %d\\nUTF-8: %s\\nBytes: %d", hexEditorBase + offset, offset, value, end));
+                return;
+            }
+            int size = type <= 1 ? 1 : type <= 3 ? 2 : type <= 7 ? 4 : 8;
+            if (offset + size > data.length) throw new IllegalArgumentException("Not enough bytes remain for this type.");
+            ByteBuffer b = ByteBuffer.wrap(data, offset, size).order(ByteOrder.LITTLE_ENDIAN);
+            String value;
+            switch(type) {
+                case 0: value = Integer.toString(data[offset] & 255); break;
+                case 1: value = Byte.toString(data[offset]); break;
+                case 2: value = Integer.toString(b.getShort() & 65535); break;
+                case 3: value = Short.toString(b.getShort()); break;
+                case 4: value = Long.toString(b.getInt() & 0xFFFFFFFFL); break;
+                case 5: value = Integer.toString(b.getInt()); break;
+                case 6: value = Long.toUnsignedString(b.getLong()); break;
+                case 7: value = Long.toString(b.getLong()); break;
+                case 8: value = Float.toString(b.getFloat()); break;
+                case 9: value = Double.toString(b.getDouble()); break;
+                default: throw new IllegalArgumentException("Unsupported type.");
+            }
+            hexTypedResult.setText(String.format(Locale.US, "Address: 0x%X\\nOffset: %d\\nType: %s\\nValue: %s\\nRaw: %s", hexEditorBase + offset, offset, hexTypedType.getSelectedItem(), value, toHex(Arrays.copyOfRange(data, offset, offset + size))));
+        } catch (Exception e) { hexTypedResult.setText("Cannot inspect value: " + e.getMessage()); }
     }
 
     private static final class HexPage {
