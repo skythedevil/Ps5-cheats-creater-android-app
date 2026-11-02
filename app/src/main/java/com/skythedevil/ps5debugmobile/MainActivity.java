@@ -635,6 +635,12 @@ public class MainActivity extends Activity {
         aiPromptInput.setSingleLine(false);aiPromptInput.setMinLines(2);aiPromptInput.setGravity(Gravity.TOP|Gravity.START);
         page.addView(aiPromptInput,new LinearLayout.LayoutParams(-1,dp(84)));
         aiSendButton=button("SEND TO AI ASSISTANT",ACCENT);page.addView(aiSendButton);
+        LinearLayout aiScanRow=new LinearLayout(this);aiScanRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button aiRunScan=button("AI-APPROVED SCAN",PANEL),aiShareResults=button("SHARE RESULTS WITH AI",PANEL);
+        aiScanRow.addView(aiRunScan,new LinearLayout.LayoutParams(0,dp(48),1));
+        aiScanRow.addView(aiShareResults,new LinearLayout.LayoutParams(0,dp(48),1));page.addView(aiScanRow);
+        aiRunScan.setOnClickListener(v->runAiApprovedTurboScan());
+        aiShareResults.setOnClickListener(v->shareTurboResultsWithAi());
         Button aiReset=button("CLEAR CONVERSATION",PANEL);page.addView(aiReset);
         loadAiConversation();
         aiSaveButton.setOnClickListener(v->saveAiSettingsAndTest());
@@ -746,6 +752,38 @@ public class MainActivity extends Activity {
                 }
             });
         }catch(Exception e){toast("Cannot send AI message: "+e.getMessage());aiSendButton.setEnabled(true);}
+    }
+
+    private void runAiApprovedTurboScan(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        boolean refining=turboActive&&scanClient!=null;
+        String type=String.valueOf(turboType.getSelectedItem());
+        String compare=String.valueOf(turboCompare.getSelectedItem());
+        String value=turboValue.getText().toString().trim();
+        String title=refining?"Approve TurboScan refinement?":"Approve TurboScan first scan?";
+        String detail=(refining?"This will refine the active scan.":"This will start a new memory scan.")
+            +"\n\nType: "+type+"\nComparison: "+compare+"\nValue: "+(value.isEmpty()?"(not required / unknown)":value)
+            +"\n\nOnly continue if these settings match the AI's latest instructions.";
+        new android.app.AlertDialog.Builder(this).setTitle(title).setMessage(detail)
+            .setNegativeButton("CANCEL",null).setPositiveButton("RUN SCAN",(d,w)->{
+                if(refining)turboNextScan();else turboFirstScan();
+            }).show();
+    }
+    private void shareTurboResultsWithAi(){
+        if(!AiAssistant.isConfigured(this)){toast("Configure AI first.");return;}
+        if(lastTurboResults.isEmpty()){toast("Load a TurboScan results page first.");return;}
+        StringBuilder prompt=new StringBuilder("Analyse these real TurboScan results and tell me the safest next experiment. Do not assume any candidate is verified. Total matches: ")
+            .append(turboResultTotal).append(". Type: ").append(turboType.getSelectedItem())
+            .append(". Current comparison: ").append(turboCompare.getSelectedItem())
+            .append(". Search value: ").append(turboValue.getText().toString()).append(".\nLoaded candidates (address, current bytes, previous bytes):\n");
+        int limit=Math.min(lastTurboResults.size(),40);
+        for(int i=0;i<limit;i++){
+            PS5Client.TurboResult r=lastTurboResults.get(i);
+            prompt.append(String.format(Locale.US,"0x%016X | %s | %s\n",r.address,toHex(r.current),toHex(r.previous)));
+        }
+        if(lastTurboResults.size()>limit)prompt.append("… ").append(lastTurboResults.size()-limit).append(" more results omitted from this message.");
+        aiPromptInput.setText(prompt.toString());
+        sendAiMessage();
     }
 
     private void startKernelLog() {
