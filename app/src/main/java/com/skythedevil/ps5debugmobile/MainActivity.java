@@ -1865,7 +1865,12 @@ public class MainActivity extends Activity {
             if (in == null) throw new IOException("Could not open file.");
             byte[] buf = new byte[8192]; int n;
             while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-            return out.toString("UTF-8");
+            byte[] data=out.toByteArray();
+            if(data.length>=2&&(data[0]&255)==0xFF&&(data[1]&255)==0xFE)return new String(data,2,data.length-2,StandardCharsets.UTF_16LE);
+            if(data.length>=2&&(data[0]&255)==0xFE&&(data[1]&255)==0xFF)return new String(data,2,data.length-2,StandardCharsets.UTF_16BE);
+            if(data.length>3&&data[1]==0&&data[3]==0)return new String(data,StandardCharsets.UTF_16LE);
+            if(data.length>=3&&(data[0]&255)==0xEF&&(data[1]&255)==0xBB&&(data[2]&255)==0xBF)return new String(data,3,data.length-3,StandardCharsets.UTF_8);
+            return new String(data,StandardCharsets.UTF_8);
         }
     }
 
