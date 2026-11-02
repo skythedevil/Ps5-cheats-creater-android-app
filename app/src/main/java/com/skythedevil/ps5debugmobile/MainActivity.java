@@ -713,6 +713,10 @@ public class MainActivity extends Activity {
         c.append("Screen capture is not currently connected to this assistant; only use values the user explicitly reports.");
         return c.toString();
     }
+    private void appendAiMessage(String role,String content){
+        try{aiMessages.put(new JSONObject().put("role",role).put("content",content));}
+        catch(JSONException e){log("Could not append AI conversation message: "+e.getMessage());}
+    }
     private void sendAiMessage(){
         String prompt=aiPromptInput.getText().toString().trim();
         if(prompt.isEmpty())return;
@@ -728,14 +732,14 @@ public class MainActivity extends Activity {
                 try{
                     String answer=AiAssistant.chat(this,request);
                     main.post(()->{
-                        aiMessages.put(new JSONObject().put("role","assistant").put("content",answer));
+                        appendAiMessage("assistant",answer);
                         while(aiMessages.length()>41)aiMessages.remove(1);
                         saveAiConversation();renderAiConversation();aiSendButton.setEnabled(true);
                         aiStatusView.setText("CONNECTED  •  conversation saved locally.");
                     });
                 }catch(Exception e){
                     main.post(()->{
-                        aiMessages.put(new JSONObject().put("role","assistant").put("content","AI request failed: "+e.getMessage()));
+                        appendAiMessage("assistant","AI request failed: "+e.getMessage());
                         saveAiConversation();renderAiConversation();aiSendButton.setEnabled(true);
                         aiStatusView.setText("AI REQUEST FAILED  •  check endpoint, model, key and network.");
                     });
