@@ -420,7 +420,7 @@ public class MainActivity extends Activity {
         regs.setOnClickListener(v -> readRegisters());
         step.setOnClickListener(v -> debugStep());
 
-        section(page, "07  CHEAT LIBRARY", "Imports and exports PS5 Debug Studio game JSON (ps5cheat/1). V1 runs fixed patch steps only.");
+        section(page, "07  CHEAT LIBRARY", "Imports/exports ps5cheat/1 and converts fixed-patch GoldHEN JSON. Other cheat formats are not supported yet.");
         gameName = field("Game name", "");
         titleId = field("Title ID (e.g. PPSA01341)", "");
         gameVersion = field("Game version", "");
