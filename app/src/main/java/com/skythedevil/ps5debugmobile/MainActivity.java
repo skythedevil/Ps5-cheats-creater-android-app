@@ -365,9 +365,11 @@ public class MainActivity extends Activity {
         String[] compareLabels = {"Exact value", "Fuzzy (±1)", "Bigger than", "Smaller than", "Between low/high", "Increased", "Increased by", "Decreased", "Decreased by", "Changed", "Unchanged", "Unknown initial value"};
         turboCompare.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, compareLabels));
         page.addView(turboCompare);
-        turboValue = field("Value (for Between use low,high)", "100"); page.addView(turboValue);
-        turboResultStart=field("Result page start index", "0"); turboResultCount=field("Results per page (1–500)", "100");
+        turboValue = field("Search value (Between: low,high)", "100"); page.addView(turboValue);
+        turboResultStart=field("Result start index (0 = first match)", "0"); turboResultCount=field("Results per page (maximum 500)", "100");
         page.addView(turboResultStart); page.addView(turboResultCount);
+        TextView turboPagingHelp=text("Search value = the number to find. Start index = where the result list begins (0, 100, 200...). Results per page = how many matches to load at once.",11,MUTED,false);
+        turboPagingHelp.setPadding(dp(2),dp(2),dp(2),dp(8)); page.addView(turboPagingHelp);
         LinearLayout turboPageNav=new LinearLayout(this); turboPageNav.setOrientation(LinearLayout.HORIZONTAL);
         Button turboPrevPage=button("PREVIOUS PAGE",PANEL), turboNextPage=button("NEXT PAGE",PANEL), turboReloadPage=button("RELOAD PAGE",PANEL);
         turboPageNav.addView(turboPrevPage,new LinearLayout.LayoutParams(0,dp(48),1));
