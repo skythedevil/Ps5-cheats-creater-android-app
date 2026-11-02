@@ -48,7 +48,7 @@ Reference: https://github.com/alfizari/PS5Debug-studio/tree/V1.5
 
 ## Cheats, projects and exports
 - [ ] Multi-game library, game metadata, title ID/version/content ID/process fields.
-- [ ] Cheat editor: create, rename, duplicate, enable/disable, delete, reorder and edit steps.
+- [ ] Cheat editor: create, rename, duplicate, enable/disable, delete, reorder and edit steps. (Delete, reorder and full JSON-object editing are implemented; structured editor, duplicate and enable/disable persistence remain.)
 - [ ] Full step engine: write, patch, asmpatch, alloc, code, hook, aob, call, read, set, check, python and every additional step in V1.5 source.
 - [ ] Toggle/run modes, inputs, item ID lists, validation/check-and-fix, undo restoration and turn-all-off.
 - [ ] Record cheat from Caller; add/update call steps with required buffers, variables and inputs.
