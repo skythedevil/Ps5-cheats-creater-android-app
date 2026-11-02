@@ -2024,7 +2024,7 @@ public class MainActivity extends Activity {
     private void editCheat(int index, JSONObject cheat) {
         if (!enabledCheats.isEmpty()) { toast("Restore active cheats before editing."); return; }
         EditText editor = new EditText(this);
-        editor.setText(cheat.toString(2));
+        editor.setText(cheat.toString());
         editor.setGravity(Gravity.TOP | Gravity.START);
         editor.setTextSize(13);
         editor.setTypeface(Typeface.MONOSPACE);
