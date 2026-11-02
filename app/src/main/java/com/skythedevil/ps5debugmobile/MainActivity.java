@@ -2408,7 +2408,12 @@ public class MainActivity extends Activity {
                 if (undo == null) throw new IllegalStateException("Cheat restore state is missing; no bytes were changed.");
                 List<UndoPatch> reverse = new ArrayList<>(undo);
                 Collections.reverse(reverse);
-                for (UndoPatch u : reverse) client.write(p, u.address, u.original);
+                for (UndoPatch u : reverse) {
+                    client.write(p, u.address, u.original);
+                    byte[] restored = client.read(p, u.address, u.original.length);
+                    if (!Arrays.equals(u.original, restored))
+                        throw new IOException("Restore verification failed at 0x" + Long.toHexString(u.address).toUpperCase(Locale.US) + ".");
+                }
                 enabledCheats.remove(index);
                 return "Restored " + cheat.optString("name") + ".";
             }
@@ -2429,12 +2434,19 @@ public class MainActivity extends Activity {
                     // covers a write that reports an error after a partial transport operation.
                     undo.add(new UndoPatch(address, old));
                     client.write(p, address, patch);
+                    byte[] written = client.read(p, address, patch.length);
+                    if (!Arrays.equals(patch, written))
+                        throw new IOException("Patch read-back verification failed at 0x" + Long.toHexString(address).toUpperCase(Locale.US) + ".");
                 }
             } catch (Exception applyFailure) {
                 Collections.reverse(undo);
                 for (UndoPatch u : undo) {
-                    try { client.write(p, u.address, u.original); }
-                    catch (Exception rollbackFailure) { applyFailure.addSuppressed(rollbackFailure); }
+                    try {
+                        client.write(p, u.address, u.original);
+                        byte[] restored = client.read(p, u.address, u.original.length);
+                        if (!Arrays.equals(u.original, restored))
+                            throw new IOException("Rollback verification failed at 0x" + Long.toHexString(u.address).toUpperCase(Locale.US) + ".");
+                    } catch (Exception rollbackFailure) { applyFailure.addSuppressed(rollbackFailure); }
                 }
                 throw applyFailure;
             }
