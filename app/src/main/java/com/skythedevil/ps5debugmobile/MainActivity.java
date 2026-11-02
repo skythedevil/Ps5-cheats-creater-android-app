@@ -41,6 +41,8 @@ public class MainActivity extends Activity {
     private static final int REQ_EXPORT_GOLDHEN = 23;
     private static final int REQ_EXPORT_SHN = 24;
     private static final int REQ_EXPORT_MC4 = 25;
+    private static final int REQ_IMPORT_ADDRESS_TABLE = 26;
+    private static final int REQ_EXPORT_ADDRESS_TABLE = 27;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -250,6 +252,13 @@ public class MainActivity extends Activity {
         LinearLayout addressActions=new LinearLayout(this); addressActions.setOrientation(LinearLayout.HORIZONTAL);
         Button addAddress=button("ADD ADDRESS", ACCENT), refreshAddresses=button("REFRESH ALL", PANEL); addressAutoButton=button("AUTO REFRESH: OFF", PANEL);
         addressActions.addView(addAddress,new LinearLayout.LayoutParams(0,-2,1)); addressActions.addView(refreshAddresses,new LinearLayout.LayoutParams(0,-2,1)); page.addView(addressActions); page.addView(addressAutoButton);
+        LinearLayout addressFileActions=new LinearLayout(this);addressFileActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button importAddressTable=button("LOAD TABLE",PANEL),exportAddressTable=button("SAVE TABLE",PANEL);
+        addressFileActions.addView(importAddressTable,new LinearLayout.LayoutParams(0,dp(44),1));
+        addressFileActions.addView(exportAddressTable,new LinearLayout.LayoutParams(0,dp(44),1));
+        page.addView(addressFileActions);
+        importAddressTable.setOnClickListener(v->importAddressTable());
+        exportAddressTable.setOnClickListener(v->exportAddressTable());
         addressRows=new LinearLayout(this); addressRows.setOrientation(LinearLayout.VERTICAL); page.addView(addressRows);
         addAddress.setOnClickListener(v->addAddressEntry());
         refreshAddresses.setOnClickListener(v->refreshAddressEntries());
@@ -1065,6 +1074,14 @@ public class MainActivity extends Activity {
         renderAddressEntries();
         if(hasFrozenAddresses()){addressHandler.removeCallbacks(addressFreezeTick);addressHandler.post(addressFreezeTick);}
     }
+    private void importAddressTable() {
+        Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("application/json");
+        startActivityForResult(i,REQ_IMPORT_ADDRESS_TABLE);
+    }
+    private void exportAddressTable() {
+        Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("application/json");
+        i.putExtra(Intent.EXTRA_TITLE,"ps5-address-table.json");startActivityForResult(i,REQ_EXPORT_ADDRESS_TABLE);
+    }
     private void saveAddressEntries() {
         JSONArray arr=new JSONArray();
         for(AddressEntry e:addressEntries){JSONObject o=new JSONObject();try{o.put("name",e.name);o.put("address",e.address);o.put("bytes",e.bytes);o.put("type",e.type);o.put("frozen",e.frozen);}catch(JSONException ignored){}arr.put(o);}
@@ -1852,7 +1869,37 @@ public class MainActivity extends Activity {
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         try {
-            if (requestCode == REQ_IMPORT) {
+            if (requestCode == REQ_IMPORT_ADDRESS_TABLE) {
+                JSONObject imported = new JSONObject(readUri(uri).trim());
+                if (!"ps5-address-table/1".equals(imported.optString("format")) || imported.optJSONArray("entries") == null)
+                    throw new JSONException("Unsupported address table. Expected ps5-address-table/1.");
+                JSONArray entries = imported.getJSONArray("entries");
+                List<AddressEntry> loaded = new ArrayList<>();
+                if (entries.length() > 10000) throw new IllegalArgumentException("Address table exceeds the 10,000-entry safety limit.");
+                for (int n=0;n<entries.length();n++) {
+                    JSONObject item=entries.optJSONObject(n);
+                    if(item==null)throw new JSONException("Address entry "+(n+1)+" is not an object.");
+                    String address=item.optString("address","").trim();
+                    String bytes=toHex(parseHex(item.optString("bytes","")));
+                    int type=item.optInt("type",0);
+                    if(address.isEmpty()||bytes.isEmpty()||type<0||type>10)throw new IllegalArgumentException("Invalid address entry "+(n+1)+".");
+                    if(parseHex(bytes).length>4096)throw new IllegalArgumentException("Entry "+(n+1)+" exceeds 4096 bytes.");
+                    loaded.add(new AddressEntry(item.optString("name","Entry "+(n+1)),address,bytes,type,item.optBoolean("frozen",false)));
+                }
+                addressEntries.clear();addressEntries.addAll(loaded);saveAddressEntries();renderAddressEntries();
+                addressHandler.removeCallbacks(addressFreezeTick);if(hasFrozenAddresses()&&connected)addressHandler.post(addressFreezeTick);
+                log("Loaded "+loaded.size()+" address entries from file.");
+            } else if (requestCode == REQ_EXPORT_ADDRESS_TABLE) {
+                JSONObject table=new JSONObject();table.put("format","ps5-address-table/1");
+                JSONArray entries=new JSONArray();
+                for(AddressEntry e:addressEntries){JSONObject item=new JSONObject();item.put("name",e.name);item.put("address",e.address);item.put("bytes",e.bytes);item.put("type",e.type);item.put("frozen",e.frozen);entries.put(item);}
+                table.put("entries",entries);
+                try(OutputStream out=getContentResolver().openOutputStream(uri)){
+                    if(out==null)throw new IOException("Could not open destination.");
+                    out.write(table.toString(2).getBytes(StandardCharsets.UTF_8));
+                }
+                log("Saved "+addressEntries.size()+" address entries to JSON.");
+            } else if (requestCode == REQ_IMPORT) {
                 String json = readUri(uri).trim();
                 if(json.startsWith("<")&&json.contains("<Trainer")){
                     gameFile=convertShnXml(json);
