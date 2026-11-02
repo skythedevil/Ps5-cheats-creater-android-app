@@ -2052,17 +2052,6 @@ public class MainActivity extends Activity {
             apply.setEnabled(enabledCheats.containsKey(idx) || c.optBoolean("enabled", true));
             available.setEnabled(!enabledCheats.containsKey(idx));
             available.setOnCheckedChangeListener((view, checked) -> {
-                if (enabledCheats.containsKey(idx)) {
-                    available.setOnCheckedChangeListener(null);
-                    available.setChecked(true);
-                    available.setOnCheckedChangeListener((v2, value) -> {
-                        if (enabledCheats.containsKey(idx)) { v2.setChecked(true); return; }
-                        try { c.put("enabled", value); persistGameFile(); apply.setEnabled(value); log((value ? "Enabled " : "Disabled ") + c.optString("name") + " in the cheat library."); }
-                        catch (JSONException e) { toast("Could not save enabled state: " + e.getMessage()); }
-                    });
-                    toast("Restore this active cheat before changing its enabled state.");
-                    return;
-                }
                 try {
                     c.put("enabled", checked);
                     persistGameFile();
