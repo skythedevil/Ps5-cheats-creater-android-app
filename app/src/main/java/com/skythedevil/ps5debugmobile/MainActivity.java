@@ -2952,6 +2952,20 @@ public class MainActivity extends Activity {
                 stepOutput.add("WAIT: "+delay+" ms");
                 continue;
             }
+            if("call".equals(op)){
+                long target=resolveAddress(step.getString("rip"),processId);boolean executable=false;
+                for(MapEntry map:client.maps(processId))if((map.prot&4)!=0&&Long.compareUnsigned(target,map.start)>=0&&Long.compareUnsigned(target,map.end)<0){executable=true;break;}
+                if(!executable)throw new IOException("Call target is not inside an executable memory map.");
+                JSONArray args=step.optJSONArray("args");if(args!=null&&args.length()>6)throw new IllegalArgumentException("Call step supports at most six integer arguments.");
+                long[] values=new long[6];
+                if(args!=null)for(int n=0;n<args.length();n++){
+                    Object raw=args.get(n);String value=String.valueOf(raw).trim();
+                    values[n]=value.matches("(?i)0x[0-9a-f]+")?Long.parseUnsignedLong(value.substring(2),16):Long.parseLong(value);
+                }
+                long result=client.callSafe(processId,target,values);
+                stepOutput.add("CALL 0x"+Long.toHexString(target).toUpperCase(Locale.US)+" -> RAX 0x"+Long.toHexString(result).toUpperCase(Locale.US)+" (not retried)");
+                continue;
+            }
             if("repeat".equals(op)){
                 int count=step.optInt("count",1),delay=step.optInt("delay_ms",0);JSONArray children=step.optJSONArray("steps");
                 if(count<1||count>1000||delay<0||delay>60000||children==null||children.length()==0)throw new IllegalArgumentException("Nested repeat "+(i+1)+" has invalid count, delay or children.");
@@ -3119,8 +3133,8 @@ public class MainActivity extends Activity {
                 }
                 continue;
             }
-            if(!"patch".equals(op)&&!"write".equals(op)&&!"check".equals(op)&&!"nop".equals(op)&&!"code".equals(op)&&!"read".equals(op))
-                throw new IllegalArgumentException("Supported steps: patch, write, check, read, nop, code and repeat. Unsupported step: "+op);
+            if(!"patch".equals(op)&&!"write".equals(op)&&!"check".equals(op)&&!"nop".equals(op)&&!"code".equals(op)&&!"read".equals(op)&&!"call".equals(op))
+                throw new IllegalArgumentException("Supported steps: patch, write, check, read, call, nop, code, log, sleep and repeat. Unsupported step: "+op);
             long address=resolveAddress(step.getString("addr"),processId);
             if("read".equals(op)){
                 String readType=step.optString("type",step.has("length")||step.has("size")?"hex":"u32").toLowerCase(Locale.US);
