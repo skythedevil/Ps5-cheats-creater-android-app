@@ -8,6 +8,8 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
+import android.util.Xml;
+import org.xmlpull.v1.XmlPullParser;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -1685,7 +1687,7 @@ public class MainActivity extends Activity {
     private void importJson() {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("application/json");
+        i.setType("*/*");
         startActivityForResult(i, REQ_IMPORT);
     }
 
@@ -1742,20 +1744,19 @@ public class MainActivity extends Activity {
         Uri uri = data.getData();
         try {
             if (requestCode == REQ_IMPORT) {
-                String json = readUri(uri);
-                JSONObject imported = new JSONObject(json);
-                if(imported.has("game")&&imported.has("cheats")&&"ps5cheat/1".equals(imported.optString("format"))) {
-                    gameFile=imported;
-                } else if(imported.has("mods")) {
-                    gameFile=convertGoldHenJson(imported);
-                } else {
-                    throw new JSONException("Unsupported JSON. Expected ps5cheat/1 or GoldHEN mods JSON.");
+                String json = readUri(uri).trim();
+                if(json.startsWith("<")&&json.contains("<Trainer")){
+                    gameFile=convertShnXml(json);
+                    gameName.setText(gameFile.optString("game"));titleId.setText(gameFile.optString("title_id"));gameVersion.setText(gameFile.optString("version"));
+                    refreshCheatList();log("Imported "+gameFile.getJSONArray("cheats").length()+" SHN cheat(s).");
+                }else{
+                    JSONObject imported = new JSONObject(json);
+                    if(imported.has("game")&&imported.has("cheats")&&"ps5cheat/1".equals(imported.optString("format"))) gameFile=imported;
+                    else if(imported.has("mods")) gameFile=convertGoldHenJson(imported);
+                    else throw new JSONException("Unsupported JSON. Expected ps5cheat/1 or GoldHEN mods JSON.");
+                    gameName.setText(gameFile.optString("game"));titleId.setText(gameFile.optString("title_id"));gameVersion.setText(gameFile.optString("version"));
+                    refreshCheatList();log("Imported "+gameFile.getJSONArray("cheats").length()+" supported cheat(s).");
                 }
-                gameName.setText(gameFile.optString("game"));
-                titleId.setText(gameFile.optString("title_id"));
-                gameVersion.setText(gameFile.optString("version"));
-                refreshCheatList();
-                log("Imported " + gameFile.getJSONArray("cheats").length() + " supported cheat(s).");
             } else if (requestCode == REQ_EXPORT_GOLDHEN) {
                 JSONObject goldhen=buildGoldHenJson();
                 try(OutputStream out=getContentResolver().openOutputStream(uri)){
@@ -1785,6 +1786,53 @@ public class MainActivity extends Activity {
         }
     }
 
+
+
+    private JSONObject convertShnXml(String xml)throws Exception{
+        XmlPullParser parser=Xml.newPullParser();parser.setInput(new java.io.StringReader(xml));
+        JSONObject out=new JSONObject();JSONArray cheats=new JSONArray();
+        String game="Imported SHN",title="",version="",process="eboot.bin",cheatName=null,section="0",offset="",on="",absolute="false";
+        JSONArray steps=null;int event=parser.getEventType();
+        while(event!=XmlPullParser.END_DOCUMENT){
+            if(event==XmlPullParser.START_TAG){
+                String tag=parser.getName();
+                if("Trainer".equalsIgnoreCase(tag)){
+                    String v=parser.getAttributeValue(null,"Game");if(v!=null&&!v.isEmpty())game=v;
+                    v=parser.getAttributeValue(null,"Cusa");if(v!=null)title=v.toUpperCase(Locale.US);
+                    v=parser.getAttributeValue(null,"Version");if(v!=null)version=v;
+                    v=parser.getAttributeValue(null,"Process");if(v!=null)process=v;
+                }else if("Cheat".equalsIgnoreCase(tag)){
+                    cheatName=parser.getAttributeValue(null,"Text");if(cheatName==null||cheatName.isEmpty())cheatName="Imported cheat";
+                    steps=new JSONArray();
+                }else if("Cheatline".equalsIgnoreCase(tag)){section="0";offset="";on="";absolute="false";}
+                else if("Section".equalsIgnoreCase(tag))section=parser.nextText().trim();
+                else if("Offset".equalsIgnoreCase(tag))offset=parser.nextText().trim();
+                else if("ValueOn".equalsIgnoreCase(tag))on=parser.nextText().trim();
+                else if("Absolute".equalsIgnoreCase(tag))absolute=parser.nextText().trim();
+            }else if(event==XmlPullParser.END_TAG){
+                String tag=parser.getName();
+                if("Cheatline".equalsIgnoreCase(tag)&&steps!=null&&!offset.isEmpty()&&!on.isEmpty()){
+                    int sec=0;try{sec=Integer.parseInt(section.trim());}catch(Exception ignored){}
+                    if(sec==0)try{
+                        long off=offset.toLowerCase(Locale.US).startsWith("0x")?Long.parseUnsignedLong(offset.substring(2),16):Long.parseUnsignedLong(offset,16);
+                        byte[] bytes=parseHex(on);if(bytes.length>0){
+                            boolean abs=absolute.equalsIgnoreCase("true")||absolute.equals("1");
+                            String addr=abs?"0x"+Long.toHexString(off):"module(main)+0x"+Long.toHexString(off);
+                            steps.put(new JSONObject().put("op","patch").put("addr",addr).put("type","hex").put("value",toHex(bytes)));
+                        }
+                    }catch(Exception ignored){}
+                }else if("Cheat".equalsIgnoreCase(tag)&&steps!=null){
+                    if(steps.length()>0)cheats.put(new JSONObject().put("name",cheatName).put("mode","toggle").put("steps",steps));
+                    cheatName=null;steps=null;
+                }
+            }
+            event=parser.next();
+        }
+        if(cheats.length()==0)throw new IOException("SHN contains no supported section-0 fixed hex patches.");
+        out.put("format","ps5cheat/1").put("game",game).put("title_id",title).put("version",version).put("process",process);
+        out.put("notes","Imported from SHN XML. Off bytes are restored from live memory; non-zero sections and unsupported lines are skipped.");
+        out.put("cheats",cheats);return out;
+    }
 
     private JSONObject convertGoldHenJson(JSONObject source)throws Exception{
         JSONObject out=new JSONObject();
