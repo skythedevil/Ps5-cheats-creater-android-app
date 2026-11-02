@@ -2151,6 +2151,12 @@ public class MainActivity extends Activity {
         actions.addView(edit, new LinearLayout.LayoutParams(0, dp(44), 1));
         actions.addView(remove, new LinearLayout.LayoutParams(0, dp(44), 1));
         panel.addView(actions);
+        LinearLayout orderActions = new LinearLayout(this);
+        Button moveUp = button("MOVE STEP UP", PANEL);
+        Button moveDown = button("MOVE STEP DOWN", PANEL);
+        orderActions.addView(moveUp, new LinearLayout.LayoutParams(0, dp(42), 1));
+        orderActions.addView(moveDown, new LinearLayout.LayoutParams(0, dp(42), 1));
+        panel.addView(orderActions);
         final int[] selected = {-1};
         final TextView selection = text("No step selected", 12, TEXT, false);
         panel.addView(selection);
@@ -2184,6 +2190,28 @@ public class MainActivity extends Activity {
         remove.setOnClickListener(v -> {
             if (selected[0] < 0 || selected[0] >= working.length()) { showPicker.run(); return; }
             working.remove(selected[0]); selected[0] = -1; updateSelection.run();
+        });
+        moveUp.setOnClickListener(v -> {
+            if (selected[0] < 0 || selected[0] >= working.length()) { showPicker.run(); return; }
+            if (selected[0] == 0) { toast("This is already the first step."); return; }
+            try {
+                Object previous = working.get(selected[0] - 1);
+                Object current = working.get(selected[0]);
+                working.put(selected[0] - 1, current);
+                working.put(selected[0], previous);
+                selected[0]--; updateSelection.run();
+            } catch (JSONException e) { toast("Could not reorder step: " + e.getMessage()); }
+        });
+        moveDown.setOnClickListener(v -> {
+            if (selected[0] < 0 || selected[0] >= working.length()) { showPicker.run(); return; }
+            if (selected[0] >= working.length() - 1) { toast("This is already the last step."); return; }
+            try {
+                Object next = working.get(selected[0] + 1);
+                Object current = working.get(selected[0]);
+                working.put(selected[0] + 1, current);
+                working.put(selected[0], next);
+                selected[0]++; updateSelection.run();
+            } catch (JSONException e) { toast("Could not reorder step: " + e.getMessage()); }
         });
         new android.app.AlertDialog.Builder(this).setTitle("Cheat steps (" + working.length() + ")")
             .setView(panel).setNegativeButton("CANCEL", null).setPositiveButton("SAVE STEPS", (d, w) -> {
