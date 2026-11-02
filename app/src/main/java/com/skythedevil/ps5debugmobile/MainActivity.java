@@ -10,6 +10,7 @@ import android.graphics.Typeface;
 import android.net.Uri;
 import android.util.Xml;
 import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlSerializer;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -35,6 +36,7 @@ public class MainActivity extends Activity {
     private static final int REQ_IMPORT = 21;
     private static final int REQ_EXPORT = 22;
     private static final int REQ_EXPORT_GOLDHEN = 23;
+    private static final int REQ_EXPORT_SHN = 24;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -440,12 +442,14 @@ public class MainActivity extends Activity {
         Button importFile = button("IMPORT JSON", PANEL);
         Button exportFile = button("EXPORT JSON", PANEL);
         Button exportGoldHenFile=button("EXPORT GOLDHEN",PANEL);
+        Button exportShnFile=button("EXPORT SHN",PANEL);
         fileButtons.addView(importFile, new LinearLayout.LayoutParams(0, dp(48), 1));
         LinearLayout.LayoutParams right = new LinearLayout.LayoutParams(0, dp(48), 1);
         right.setMargins(dp(8), 0, 0, 0);
         fileButtons.addView(exportFile, right);
         page.addView(fileButtons);
         page.addView(exportGoldHenFile);
+        page.addView(exportShnFile);
         cheatStatus = text("No game file loaded.", 12, MUTED, false);
         cheatStatus.setPadding(0, dp(10), 0, dp(6));
         page.addView(cheatStatus);
@@ -457,6 +461,7 @@ public class MainActivity extends Activity {
         importFile.setOnClickListener(v -> importJson());
         exportFile.setOnClickListener(v -> exportJson());
         exportGoldHenFile.setOnClickListener(v->exportGoldHenJson());
+        exportShnFile.setOnClickListener(v->exportShn());
 
         section(page, "08  ACTIVITY LOG", "Recent connection and operation results.");
         logView = text("Ready.", 11, MUTED, false);
@@ -1692,6 +1697,36 @@ public class MainActivity extends Activity {
     }
 
 
+
+    private void exportShn(){
+        if(gameFile==null){toast("Create or import a game file first.");return;}
+        Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("application/xml");
+        String id=gameFile.optString("title_id","PS5");i.putExtra(Intent.EXTRA_TITLE,(id.isEmpty()?"PS5-game":id)+".shn");
+        startActivityForResult(i,REQ_EXPORT_SHN);
+    }
+    private String buildShnXml()throws Exception{
+        JSONObject gold=buildGoldHenJson();StringWriter writer=new StringWriter();XmlSerializer x=Xml.newSerializer();x.setOutput(writer);
+        x.startDocument("UTF-8",true);x.startTag(null,"Trainer");
+        x.attribute(null,"Game",gold.optString("name","game"));x.attribute(null,"Cusa",gold.optString("id",""));
+        x.attribute(null,"Version",gold.optString("version",""));x.attribute(null,"Process",gold.optString("process","eboot.bin"));
+        JSONArray mods=gold.getJSONArray("mods");
+        for(int i=0;i<mods.length();i++){
+            JSONObject mod=mods.getJSONObject(i);x.startTag(null,"Cheat");x.attribute(null,"Text",mod.optString("name","Cheat"));
+            JSONArray memory=mod.getJSONArray("memory");
+            for(int j=0;j<memory.length();j++){
+                JSONObject line=memory.getJSONObject(j);x.startTag(null,"Cheatline");
+                x.startTag(null,"Section");x.text("0");x.endTag(null,"Section");
+                x.startTag(null,"Offset");x.text(line.optString("offset","0"));x.endTag(null,"Offset");
+                x.startTag(null,"ValueOn");x.text(line.optString("on",""));x.endTag(null,"ValueOn");
+                x.startTag(null,"ValueOff");x.text("");x.endTag(null,"ValueOff");
+                if(line.optBoolean("absolute",false)){x.startTag(null,"Absolute");x.text("true");x.endTag(null,"Absolute");}
+                x.endTag(null,"Cheatline");
+            }
+            x.endTag(null,"Cheat");
+        }
+        x.endTag(null,"Trainer");x.endDocument();return writer.toString();
+    }
+
     private void exportGoldHenJson(){
         if(gameFile==null){toast("Create or import a game file first.");return;}
         Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("application/json");
@@ -1757,7 +1792,7 @@ public class MainActivity extends Activity {
                     gameName.setText(gameFile.optString("game"));titleId.setText(gameFile.optString("title_id"));gameVersion.setText(gameFile.optString("version"));
                     refreshCheatList();log("Imported "+gameFile.getJSONArray("cheats").length()+" supported cheat(s).");
                 }
-            } else if (requestCode == REQ_EXPORT_GOLDHEN) {
+            } else if (requestCode == REQ_EXPORT_SHN) {\n                String shn=buildShnXml();\n                try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IOException("Could not open destination.");out.write(shn.getBytes(StandardCharsets.UTF_8));}\n                log("Exported SHN XML.");\n            } else if (requestCode == REQ_EXPORT_GOLDHEN) {
                 JSONObject goldhen=buildGoldHenJson();
                 try(OutputStream out=getContentResolver().openOutputStream(uri)){
                     if(out==null)throw new IOException("Could not open destination.");
