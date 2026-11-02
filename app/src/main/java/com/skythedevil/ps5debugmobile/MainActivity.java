@@ -771,11 +771,19 @@ public class MainActivity extends Activity {
             client.write(p,cave,generatedHookTrampoline);
             byte[] caveCheck=client.read(p,cave,generatedHookTrampoline.length);
             if(!Arrays.equals(caveCheck,generatedHookTrampoline))throw new IOException("Trampoline read-back mismatch; hook site was not modified.");
-            client.write(p,generatedHookSite,generatedHookPatch);
-            byte[] patchCheck=client.read(p,generatedHookSite,generatedHookPatch.length);
-            if(!Arrays.equals(patchCheck,generatedHookPatch)){
-                client.write(p,generatedHookSite,generatedHookOriginal);
-                throw new IOException("Hook patch read-back mismatch; original bytes were restored.");
+            try{
+                client.write(p,generatedHookSite,generatedHookPatch);
+                byte[] patchCheck=client.read(p,generatedHookSite,generatedHookPatch.length);
+                if(!Arrays.equals(patchCheck,generatedHookPatch))throw new IOException("Hook patch read-back mismatch.");
+            }catch(Exception installError){
+                try{
+                    client.write(p,generatedHookSite,generatedHookOriginal);
+                    byte[] restored=client.read(p,generatedHookSite,generatedHookOriginal.length);
+                    if(!Arrays.equals(restored,generatedHookOriginal))throw new IOException("restore verification mismatch");
+                }catch(Exception restoreError){
+                    throw new IOException("Hook install failed ("+installError.getMessage()+") and automatic restore failed ("+restoreError.getMessage()+"). Inspect hook-site memory immediately.",installError);
+                }
+                throw new IOException("Hook install failed; original bytes were restored and verified: "+installError.getMessage(),installError);
             }
             return "Trampoline written and hook patch verified.\\nCave: 0x"+Long.toHexString(cave).toUpperCase(Locale.US)+"\\nHook: 0x"+Long.toHexString(generatedHookSite).toUpperCase(Locale.US);
         },hookResult::setText);
