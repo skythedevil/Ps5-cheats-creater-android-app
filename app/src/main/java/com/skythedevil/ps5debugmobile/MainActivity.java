@@ -371,7 +371,7 @@ public class MainActivity extends Activity {
         hookInstall.setOnClickListener(v->installGeneratedHook());
         hookRestore.setOnClickListener(v->restoreGeneratedHook());
 
-        section(page, "06  DEBUGGER", "Attach/detach, software breakpoints, hardware watchpoints, thread listing and register inspection. Full async stepping/event UI is still pending.");
+        section(page, "06  DEBUGGER", "Attach/detach, software breakpoints, hardware watchpoints, thread listing, register inspection, single-step and TCP 755 live event listener.");
         breakpointIndex = field("Breakpoint slot (0–29)", "0");
         breakpointAddress = field("Breakpoint address", "0x0");
         page.addView(breakpointIndex); page.addView(breakpointAddress);
@@ -1541,7 +1541,7 @@ public class MainActivity extends Activity {
         if (!connected) { toast("Connect to the PS5 first."); return; }
         runAsync(attach ? "Attaching debugger" : "Detaching debugger", () -> {
             client.debugAttach(currentPid(), attach);
-            return attach ? "Debugger attached. The payload should connect back to the phone on TCP 755; async event UI is pending." : "Debugger detached.";
+            return attach ? "Debugger attached. TCP 755 listener is active for asynchronous event packets." : "Debugger detached.";
         }, debugResult::setText);
     }
 
