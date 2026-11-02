@@ -77,6 +77,8 @@ public class MainActivity extends Activity {
     private EditText asmAddress,asmSource,hookTarget,hookDetour,hookOriginal,hookLength,hookCaveAddress;
     private TextView asmResult,hookResult;
     private byte[] generatedHookPatch=new byte[0],generatedHookTrampoline=new byte[0],generatedHookOriginal=new byte[0];
+    private byte[] generatedAssembly=new byte[0],generatedAssemblyOriginal=new byte[0];
+    private long generatedAssemblyAddress=0;
     private long generatedHookSite=0;
     private EditText caveMinSize,caveMaxMiB;
     private TextView caveResult;
@@ -343,6 +345,8 @@ public class MainActivity extends Activity {
         asmSource.setSingleLine(false);asmSource.setMinLines(4);asmSource.setGravity(Gravity.TOP|Gravity.START);
         page.addView(asmAddress);page.addView(asmSource);
         Button asmBuild=button("ASSEMBLE TO HEX",PANEL);page.addView(asmBuild);
+        Button asmWrite=button("WRITE ASSEMBLED CODE + VERIFY",ACCENT);page.addView(asmWrite);
+        Button asmRestore=button("RESTORE PREVIOUS BYTES",PANEL);page.addView(asmRestore);
         asmResult=text("Supported: nop, ret, int3, push/pop 64-bit registers, mov r64, imm64, jmp/call rel32, db hex bytes.",11,MUTED,false);
         asmResult.setTypeface(Typeface.MONOSPACE);asmResult.setTextIsSelectable(true);page.addView(asmResult);
         hookTarget=field("Hook site address","0x0");
@@ -358,6 +362,8 @@ public class MainActivity extends Activity {
         hookResult=text("No hook generated. This helper does not write memory.",11,MUTED,false);
         hookResult.setTypeface(Typeface.MONOSPACE);hookResult.setTextIsSelectable(true);page.addView(hookResult);
         asmBuild.setOnClickListener(v->assembleMiniUi());
+        asmWrite.setOnClickListener(v->writeAssembledCode());
+        asmRestore.setOnClickListener(v->restoreAssembledCode());
         hookBuild.setOnClickListener(v->buildAbsoluteHook());
         hookInstall.setOnClickListener(v->installGeneratedHook());
         hookRestore.setOnClickListener(v->restoreGeneratedHook());
@@ -723,6 +729,34 @@ public class MainActivity extends Activity {
 
 
 
+
+    private void writeAssembledCode(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        if(generatedAssembly.length==0){toast("Assemble code first.");return;}
+        runAsync("Writing assembled code with read-back verification",()->{
+            int p=currentPid();byte[] before=client.read(p,generatedAssemblyAddress,generatedAssembly.length);
+            client.write(p,generatedAssemblyAddress,generatedAssembly);
+            byte[] after=client.read(p,generatedAssemblyAddress,generatedAssembly.length);
+            if(!Arrays.equals(after,generatedAssembly)){
+                client.write(p,generatedAssemblyAddress,before);
+                throw new IOException("Code write verification failed; original bytes were restored.");
+            }
+            generatedAssemblyOriginal=before;
+            return "Assembled bytes written and verified at 0x"+Long.toHexString(generatedAssemblyAddress).toUpperCase(Locale.US)+". Original bytes cached for restore.";
+        },asmResult::setText);
+    }
+    private void restoreAssembledCode(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        if(generatedAssemblyOriginal.length==0){toast("No original code snapshot available.");return;}
+        runAsync("Restoring original assembled-code bytes",()->{
+            int p=currentPid();client.write(p,generatedAssemblyAddress,generatedAssemblyOriginal);
+            byte[] check=client.read(p,generatedAssemblyAddress,generatedAssemblyOriginal.length);
+            if(!Arrays.equals(check,generatedAssemblyOriginal))throw new IOException("Original-byte restore verification failed.");
+            generatedAssemblyOriginal=new byte[0];
+            return "Original bytes restored and verified.";
+        },asmResult::setText);
+    }
+
     private void installGeneratedHook(){
         if(!connected){toast("Connect to the PS5 first.");return;}
         if(generatedHookPatch.length==0||generatedHookTrampoline.length==0){toast("Generate a hook first.");return;}
@@ -758,6 +792,7 @@ public class MainActivity extends Activity {
         try{
             long base=parseAddress(asmAddress.getText().toString());
             byte[] code=assembleMini(asmSource.getText().toString(),base);
+            generatedAssembly=code;generatedAssemblyAddress=base;generatedAssemblyOriginal=new byte[0];
             asmResult.setText("Base: 0x"+Long.toHexString(base).toUpperCase(Locale.US)+"\\nLength: "+code.length+" bytes\\nHEX: "+toHex(code));
         }catch(Exception e){asmResult.setText("Assembly error: "+e.getMessage());}
     }
