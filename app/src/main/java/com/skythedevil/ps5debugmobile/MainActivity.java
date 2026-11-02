@@ -24,6 +24,9 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 import org.json.*;
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 
 public class MainActivity extends Activity {
     private static final int BG = Color.rgb(13, 18, 28);
@@ -37,6 +40,7 @@ public class MainActivity extends Activity {
     private static final int REQ_EXPORT = 22;
     private static final int REQ_EXPORT_GOLDHEN = 23;
     private static final int REQ_EXPORT_SHN = 24;
+    private static final int REQ_EXPORT_MC4 = 25;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -443,6 +447,7 @@ public class MainActivity extends Activity {
         Button exportFile = button("EXPORT JSON", PANEL);
         Button exportGoldHenFile=button("EXPORT GOLDHEN",PANEL);
         Button exportShnFile=button("EXPORT SHN",PANEL);
+        Button exportMc4File=button("EXPORT MC4",PANEL);
         fileButtons.addView(importFile, new LinearLayout.LayoutParams(0, dp(48), 1));
         LinearLayout.LayoutParams right = new LinearLayout.LayoutParams(0, dp(48), 1);
         right.setMargins(dp(8), 0, 0, 0);
@@ -450,6 +455,7 @@ public class MainActivity extends Activity {
         page.addView(fileButtons);
         page.addView(exportGoldHenFile);
         page.addView(exportShnFile);
+        page.addView(exportMc4File);
         cheatStatus = text("No game file loaded.", 12, MUTED, false);
         cheatStatus.setPadding(0, dp(10), 0, dp(6));
         page.addView(cheatStatus);
@@ -462,6 +468,7 @@ public class MainActivity extends Activity {
         exportFile.setOnClickListener(v -> exportJson());
         exportGoldHenFile.setOnClickListener(v->exportGoldHenJson());
         exportShnFile.setOnClickListener(v->exportShn());
+        exportMc4File.setOnClickListener(v->exportMc4());
 
         section(page, "08  ACTIVITY LOG", "Recent connection and operation results.");
         logView = text("Ready.", 11, MUTED, false);
@@ -1698,6 +1705,29 @@ public class MainActivity extends Activity {
 
 
 
+
+    private static final String MC4_KEY="304c6528f659c766110239a51cl5dd9c";
+    private static final String MC4_IV="u@}kzW2u[u(8DWar";
+    private String decryptMc4(String encoded)throws Exception{
+        byte[] cipherBytes=android.util.Base64.decode(encoded.replaceAll("\\s+",""),android.util.Base64.DEFAULT);
+        Cipher cipher=Cipher.getInstance("AES/CBC/PKCS5Padding");
+        cipher.init(Cipher.DECRYPT_MODE,new SecretKeySpec(MC4_KEY.getBytes(StandardCharsets.US_ASCII),"AES"),new IvParameterSpec(MC4_IV.getBytes(StandardCharsets.US_ASCII)));
+        byte[] plain=cipher.doFinal(cipherBytes);String xml=new String(plain,StandardCharsets.UTF_8).trim();
+        if(!xml.contains("<Trainer"))throw new IOException("MC4 did not decrypt to a Trainer XML document.");
+        return xml;
+    }
+    private String encryptMc4(String xml)throws Exception{
+        Cipher cipher=Cipher.getInstance("AES/CBC/PKCS5Padding");
+        cipher.init(Cipher.ENCRYPT_MODE,new SecretKeySpec(MC4_KEY.getBytes(StandardCharsets.US_ASCII),"AES"),new IvParameterSpec(MC4_IV.getBytes(StandardCharsets.US_ASCII)));
+        return android.util.Base64.encodeToString(cipher.doFinal(xml.getBytes(StandardCharsets.UTF_8)),android.util.Base64.NO_WRAP);
+    }
+    private void exportMc4(){
+        if(gameFile==null){toast("Create or import a game file first.");return;}
+        Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("text/plain");
+        String id=gameFile.optString("title_id","PS5");i.putExtra(Intent.EXTRA_TITLE,(id.isEmpty()?"PS5-game":id)+".mc4");
+        startActivityForResult(i,REQ_EXPORT_MC4);
+    }
+
     private void exportShn(){
         if(gameFile==null){toast("Create or import a game file first.");return;}
         Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("application/xml");
@@ -1784,15 +1814,19 @@ public class MainActivity extends Activity {
                     gameFile=convertShnXml(json);
                     gameName.setText(gameFile.optString("game"));titleId.setText(gameFile.optString("title_id"));gameVersion.setText(gameFile.optString("version"));
                     refreshCheatList();log("Imported "+gameFile.getJSONArray("cheats").length()+" SHN cheat(s).");
-                }else{
+                }else if(json.startsWith("{")){
                     JSONObject imported = new JSONObject(json);
                     if(imported.has("game")&&imported.has("cheats")&&"ps5cheat/1".equals(imported.optString("format"))) gameFile=imported;
                     else if(imported.has("mods")) gameFile=convertGoldHenJson(imported);
                     else throw new JSONException("Unsupported JSON. Expected ps5cheat/1 or GoldHEN mods JSON.");
                     gameName.setText(gameFile.optString("game"));titleId.setText(gameFile.optString("title_id"));gameVersion.setText(gameFile.optString("version"));
                     refreshCheatList();log("Imported "+gameFile.getJSONArray("cheats").length()+" supported cheat(s).");
+                }else{
+                    gameFile=convertShnXml(decryptMc4(json));
+                    gameName.setText(gameFile.optString("game"));titleId.setText(gameFile.optString("title_id"));gameVersion.setText(gameFile.optString("version"));
+                    refreshCheatList();log("Decrypted and imported "+gameFile.getJSONArray("cheats").length()+" MC4 cheat(s).");
                 }
-            } else if (requestCode == REQ_EXPORT_SHN) {
+            } else if (requestCode == REQ_EXPORT_MC4) {\n                String mc4=encryptMc4(buildShnXml());\n                try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IOException("Could not open destination.");out.write(mc4.getBytes(StandardCharsets.US_ASCII));}\n                log("Exported encrypted MC4 trainer.");\n            } else if (requestCode == REQ_EXPORT_SHN) {
                 String shn=buildShnXml();
                 try(OutputStream out=getContentResolver().openOutputStream(uri)){
                     if(out==null)throw new IOException("Could not open destination.");
