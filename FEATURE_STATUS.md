@@ -1,6 +1,6 @@
 # Feature implementation status
 
-Last updated: 2026-11-02. Batch 1 pointer scanner and hex editor work, plus Batch 2 x64 assembler, hook builder and TCP 755 debug-event listener are implemented in source and CI-built. Cheat-object editing, deletion, reordering, duplication, local library persistence and rollback-safe patch application have now been added; latest commit build is pending. Physical-console validation remains pending.
+Last updated: 2026-11-02. Batch 1 pointer scanner and hex editor work, plus Batch 2 x64 assembler, hook builder and TCP 755 debug-event listener are implemented in source and CI-built. Cheat-object editing, structured step add/edit/remove, deletion, reordering, duplication, local library persistence and rollback-safe patch application have now been added; latest code commit CI build succeeded. Physical-console validation remains pending.
 
 Legend: **Implemented** = code path exists; **Partial** = limited subset only; **Pending** = not implemented; **Test pending** = code exists but CI/device validation is not complete.
 
@@ -33,7 +33,7 @@ Legend: **Implemented** = code path exists; **Partial** = limited subset only; *
 | Remote calls / buffers | Pending | — | Safe call trampoline, six arguments, alloc/free, buffers and call UI |
 | Function logger | Pending | — | Hook generation, ring buffer, polling, caller grouping and export |
 | Code caves / hooks / assembler | Partial | Bounded executable-padding scan; x64 subset assembler; assembler writes only to verified executable padding; absolute jump hook patch/trampoline generation, guarded install and restore | Full assembler, RIP-relative relocation, instruction-boundary decoding, executable allocation and physical-console validation |
-| Cheat JSON library | Partial (CI build pending) | Create/import/export `ps5cheat/1`; fixed hex patch steps; title-ID check; patch on/off restore; full JSON cheat-object editor for multi-step entries; delete, reorder and duplicate controls; local game/cheat library auto-save and restore; rollback attempt when a multi-step patch application fails | Native structured step editor, all step types, parameters, off steps, repeat, validation, groups and real-device regression |
+| Cheat JSON library | Partial (CI build pending) | Create/import/export `ps5cheat/1`; fixed hex patch steps; title-ID check; patch on/off restore; full JSON cheat-object editor for multi-step entries; native step add/edit/remove dialog; delete, reorder and duplicate controls; local game/cheat library auto-save and restore; rollback attempt when a multi-step patch application fails | Support for all step types/parameters/off steps/repeat, groups, deeper validation and real-device regression |
 | Cheat format conversion | Partial | GoldHEN JSON import/export, SHN XML import/export and MC4 AES-256-CBC import/export for fixed section-0 / absolute hex patch lines; unsupported sections are skipped and non-patch GoldHEN export is rejected | ShnExt, ps5pack, section-aware mappings and richer step conversion |
 | Cheat recorder / caller | Pending | — | Record memory changes/calls into cheat steps |
 | Pointer scanner | Pending | — | Turbo pointer-scan capability, map build, chain search, resolve/rescan and persistence |
