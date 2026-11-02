@@ -65,6 +65,9 @@ public class MainActivity extends Activity {
     private EditText pointerTarget,pointerOffset,pointerDepth,pointerBudget;
     private TextView pointerResult;
     private volatile boolean pointerCancel=false;
+    private List<PointerHit> lastPointerHits = new ArrayList<>();
+    private int lastPointerPid=-1;
+    private long lastPointerTarget=0;
     private EditText hexEditorInput;
     private TextView hexEditorInfo;
     private EditText hexTypedOffset;
@@ -276,6 +279,12 @@ public class MainActivity extends Activity {
         Button pointerScan=button("BUILD MAP + FIND CHAINS",ACCENT), pointerCancelButton=button("CANCEL",PANEL);
         pointerActions.addView(pointerScan,new LinearLayout.LayoutParams(0,dp(48),1));
         pointerActions.addView(pointerCancelButton,new LinearLayout.LayoutParams(0,dp(48),1)); page.addView(pointerActions);
+        LinearLayout pointerSavedActions=new LinearLayout(this);pointerSavedActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button savePointerResults=button("SAVE CHAINS",PANEL),loadPointerResults=button("LOAD SAVED CHAINS",PANEL);
+        pointerSavedActions.addView(savePointerResults,new LinearLayout.LayoutParams(0,dp(48),1));
+        pointerSavedActions.addView(loadPointerResults,new LinearLayout.LayoutParams(0,dp(48),1));page.addView(pointerSavedActions);
+        savePointerResults.setOnClickListener(v->savePointerChains());
+        loadPointerResults.setOnClickListener(v->loadPointerChains());
         pointerResult=text("No pointer scan performed. Readable memory; module regions prioritized; bounded by the MiB budget.",11,MUTED,false);
         pointerResult.setTypeface(Typeface.MONOSPACE); page.addView(pointerResult);
         pointerScan.setOnClickListener(v->startPointerScan());
@@ -1226,7 +1235,7 @@ public class MainActivity extends Activity {
             budget=Integer.parseInt(pointerBudget.getText().toString().trim());
             if(maxOff<0||depth<1||depth>5||budget<1||budget>256)throw new IllegalArgumentException("Offset must be non-negative, depth 1–5 and budget 1–256 MiB.");
         }catch(Exception e){toast("Pointer scan settings: "+e.getMessage());return;}
-        pointerCancel=false;pointerResult.setText("Reading process maps…");
+        pointerCancel=false;lastPointerHits=new ArrayList<>();lastPointerPid=currentPid();lastPointerTarget=target;pointerResult.setText("Reading process maps…");
         runAsync("Building pointer map and searching chains",()->{
             int p=currentPid(); List<MapEntry> regions=client.maps(p), sources=new ArrayList<>();
             long remaining=(long)budget*1024*1024,scanned=0;
@@ -1290,6 +1299,7 @@ public class MainActivity extends Activity {
                 }
                 frontier=next;
             }
+            lastPointerHits=new ArrayList<>(hits);lastPointerPid=p;lastPointerTarget=target;
             StringBuilder out=new StringBuilder("Pointer candidates: ").append(nodes.size()).append("\nScanned: ").append(scanned/1048576).append(" MiB\nTarget: 0x").append(Long.toHexString(target).toUpperCase(Locale.US)).append("\nChains: ").append(hits.size()).append("\n\n");
             for(int i=0;i<hits.size();i++){PointerHit h=hits.get(i);out.append(i+1).append(". ").append(h.module).append("+0x").append(Long.toHexString(h.baseOffset).toUpperCase(Locale.US));for(long off:h.offsets)out.append(" -> 0x").append(Long.toHexString(off).toUpperCase(Locale.US));out.append("\n");}
             if(hits.isEmpty())out.append("No module-rooted chains found. Increase offset, depth or scan budget.");
@@ -1298,6 +1308,52 @@ public class MainActivity extends Activity {
             return out.toString();
         },value->{pointerResult.setText(value);log("Pointer scan completed.");});
     }
+    private void savePointerChains(){
+        if(lastPointerHits.isEmpty()){toast("No pointer chains to save. Run a scan first.");return;}
+        try{
+            JSONObject root=new JSONObject();root.put("version",1);root.put("pid",lastPointerPid);
+            root.put("target",Long.toUnsignedString(lastPointerTarget,16));
+            JSONArray rows=new JSONArray();
+            for(PointerHit hit:lastPointerHits){
+                JSONObject row=new JSONObject();row.put("module",hit.module);
+                row.put("baseOffset",Long.toUnsignedString(hit.baseOffset,16));
+                JSONArray offsets=new JSONArray();for(long offset:hit.offsets)offsets.put(Long.toUnsignedString(offset,16));
+                row.put("offsets",offsets);rows.put(row);
+            }
+            root.put("chains",rows);
+            getSharedPreferences("pointer_scan",MODE_PRIVATE).edit().putString("saved_chains",root.toString()).apply();
+            toast("Saved "+lastPointerHits.size()+" pointer chains on this device.");
+            log("Saved "+lastPointerHits.size()+" pointer chains for PID "+lastPointerPid+".");
+        }catch(Exception e){toast("Could not save pointer chains: "+e.getMessage());}
+    }
+    private void loadPointerChains(){
+        String saved=getSharedPreferences("pointer_scan",MODE_PRIVATE).getString("saved_chains",null);
+        if(saved==null||saved.isEmpty()){toast("No saved pointer chains found on this device.");return;}
+        try{
+            JSONObject root=new JSONObject(saved);JSONArray rows=root.optJSONArray("chains");
+            if(rows==null)throw new IOException("Saved pointer-chain file is invalid.");
+            List<PointerHit> loaded=new ArrayList<>();
+            for(int i=0;i<rows.length();i++){
+                JSONObject row=rows.getJSONObject(i);JSONArray rawOffsets=row.optJSONArray("offsets");
+                List<Long> offsets=new ArrayList<>();
+                if(rawOffsets!=null)for(int j=0;j<rawOffsets.length();j++)offsets.add(Long.parseUnsignedLong(rawOffsets.getString(j),16));
+                loaded.add(new PointerHit(row.optString("module","unknown"),Long.parseUnsignedLong(row.getString("baseOffset"),16),offsets));
+            }
+            lastPointerHits=loaded;lastPointerPid=root.optInt("pid",-1);
+            String targetHex=root.optString("target","0");lastPointerTarget=Long.parseUnsignedLong(targetHex,16);
+            StringBuilder out=new StringBuilder("SAVED POINTER CHAINS\nPID: ").append(lastPointerPid)
+                .append("\nTarget: 0x").append(Long.toHexString(lastPointerTarget).toUpperCase(Locale.US))
+                .append("\nChains: ").append(loaded.size()).append("\n\n");
+            for(int i=0;i<loaded.size();i++){
+                PointerHit hit=loaded.get(i);out.append(i+1).append(". ").append(hit.module).append("+0x")
+                    .append(Long.toHexString(hit.baseOffset).toUpperCase(Locale.US));
+                for(long offset:hit.offsets)out.append(" -> 0x").append(Long.toHexString(offset).toUpperCase(Locale.US));
+                out.append("\n");
+            }
+            pointerResult.setText(out.toString());toast("Loaded "+loaded.size()+" saved pointer chains.");
+        }catch(Exception e){toast("Could not load saved pointer chains: "+e.getMessage());}
+    }
+
     private static boolean isPointerModule(MapEntry m){
         String n=m.name==null?"":m.name.toLowerCase(Locale.US);
         return n.equals("executable")||n.matches(".*\\.(bin|elf|self|prx|sprx|so)$");
