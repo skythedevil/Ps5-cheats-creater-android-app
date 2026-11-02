@@ -2128,6 +2128,109 @@ public class MainActivity extends Activity {
                     refreshCheatList();
                     log("Updated complete cheat: " + name);
                 } catch (Exception e) { toast("Cheat not saved: " + e.getMessage()); }
+            }).setNeutralButton("EDIT STEPS", (dialog, which) -> editCheatSteps(index, cheat)).show();
+    }
+
+    private void editCheatSteps(int cheatIndex, JSONObject cheat) {
+        if (!enabledCheats.isEmpty()) { toast("Restore active cheats before editing."); return; }
+        JSONArray steps = cheat.optJSONArray("steps");
+        if (steps == null) steps = new JSONArray();
+        final JSONArray working = new JSONArray(steps.toString());
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(12), dp(8), dp(12), dp(8));
+        TextView help = text("Select a step to edit. Add and remove steps here; unknown step fields are preserved when editing.", 12, MUTED, false);
+        panel.addView(help);
+        LinearLayout actions = new LinearLayout(this);
+        Button add = button("ADD STEP", PANEL);
+        Button edit = button("EDIT SELECTED", PANEL);
+        Button remove = button("REMOVE", PANEL);
+        actions.addView(add, new LinearLayout.LayoutParams(0, dp(44), 1));
+        actions.addView(edit, new LinearLayout.LayoutParams(0, dp(44), 1));
+        actions.addView(remove, new LinearLayout.LayoutParams(0, dp(44), 1));
+        panel.addView(actions);
+        final int[] selected = {-1};
+        final TextView selection = text("No step selected", 12, TEXT, false);
+        panel.addView(selection);
+        Runnable updateSelection = () -> {
+            if (selected[0] >= 0 && selected[0] < working.length()) {
+                JSONObject step = working.optJSONObject(selected[0]);
+                selection.setText("Selected step " + (selected[0] + 1) + ": " + (step == null ? "Invalid step" : step.optString("op", "unknown") + " / " + step.optString("type", "n/a")));
+            } else { selected[0] = -1; selection.setText("No step selected"); }
+        };
+        Runnable showPicker = () -> {
+            if (working.length() == 0) { toast("No steps. Use ADD STEP."); return; }
+            String[] labels = new String[working.length()];
+            for (int i = 0; i < working.length(); i++) {
+                JSONObject step = working.optJSONObject(i);
+                labels[i] = (i + 1) + ". " + (step == null ? "Invalid step" : step.optString("op", "?") + " · " + step.optString("addr", "no address"));
+            }
+            new android.app.AlertDialog.Builder(this).setTitle("Select cheat step").setItems(labels, (d, which) -> { selected[0] = which; updateSelection.run(); }).show();
+        };
+        edit.setOnClickListener(v -> {
+            if (selected[0] < 0 || selected[0] >= working.length()) { showPicker.run(); return; }
+            JSONObject current = working.optJSONObject(selected[0]);
+            if (current == null) { toast("Selected step is not a valid object."); return; }
+            showCheatStepEditor(working, selected[0], current, false, updateSelection);
+        });
+        add.setOnClickListener(v -> {
+            JSONObject fresh = new JSONObject();
+            try { fresh.put("op", "patch"); fresh.put("type", "hex"); fresh.put("addr", "0x"); fresh.put("value", "00"); }
+            catch (JSONException e) { toast(e.getMessage()); return; }
+            showCheatStepEditor(working, working.length(), fresh, true, updateSelection);
+        });
+        remove.setOnClickListener(v -> {
+            if (selected[0] < 0 || selected[0] >= working.length()) { showPicker.run(); return; }
+            working.remove(selected[0]); selected[0] = -1; updateSelection.run();
+        });
+        new android.app.AlertDialog.Builder(this).setTitle("Cheat steps (" + working.length() + ")")
+            .setView(panel).setNegativeButton("CANCEL", null).setPositiveButton("SAVE STEPS", (d, w) -> {
+                if (working.length() == 0) { toast("A cheat must contain at least one step."); return; }
+                try {
+                    for (int i = 0; i < working.length(); i++) {
+                        JSONObject step = working.optJSONObject(i);
+                        if (step == null || step.optString("op", "").trim().isEmpty()) throw new IllegalArgumentException("Step " + (i + 1) + " needs an operation.");
+                        if ("patch".equalsIgnoreCase(step.optString("op"))) {
+                            if (step.optString("addr", "").trim().isEmpty()) throw new IllegalArgumentException("Patch step " + (i + 1) + " needs an address.");
+                            if ("hex".equalsIgnoreCase(step.optString("type", "hex")) && parseHex(step.optString("value", "")).length == 0) throw new IllegalArgumentException("Patch step " + (i + 1) + " needs valid hex bytes.");
+                        }
+                    }
+                    cheat.put("steps", working);
+                    gameFile.getJSONArray("cheats").put(cheatIndex, cheat);
+                    refreshCheatList();
+                    log("Saved " + working.length() + " structured cheat step(s) for " + cheat.optString("name") + ".");
+                } catch (Exception e) { toast("Steps not saved: " + e.getMessage()); }
+            }).show();
+    }
+
+    private void showCheatStepEditor(JSONArray target, int stepIndex, JSONObject original, boolean isNew, Runnable onChanged) {
+        JSONObject draft;
+        try { draft = new JSONObject(original.toString()); }
+        catch (JSONException e) { toast(e.getMessage()); return; }
+        LinearLayout fields = new LinearLayout(this);
+        fields.setOrientation(LinearLayout.VERTICAL);
+        fields.setPadding(dp(16), dp(8), dp(16), dp(4));
+        EditText op = new EditText(this); op.setSingleLine(true); op.setHint("Operation (e.g. patch)"); op.setText(draft.optString("op", "")); fields.addView(op);
+        EditText type = new EditText(this); type.setSingleLine(true); type.setHint("Value type (e.g. hex)"); type.setText(draft.optString("type", "hex")); fields.addView(type);
+        EditText address = new EditText(this); address.setSingleLine(true); address.setHint("Address / expression"); address.setText(draft.optString("addr", "")); fields.addView(address);
+        EditText value = new EditText(this); value.setSingleLine(true); value.setHint("Value (hex for patch)"); value.setText(draft.optString("value", "")); fields.addView(value);
+        new android.app.AlertDialog.Builder(this).setTitle(isNew ? "Add cheat step" : "Edit cheat step")
+            .setMessage("For patch steps, enter an address and valid hex bytes. Other step types are retained for library editing but may not be executable by this mobile build.")
+            .setView(fields).setNegativeButton("CANCEL", null).setPositiveButton("SAVE", (d, w) -> {
+                try {
+                    String operation = op.getText().toString().trim();
+                    if (operation.isEmpty()) throw new IllegalArgumentException("Operation is required.");
+                    draft.put("op", operation);
+                    if (!type.getText().toString().trim().isEmpty()) draft.put("type", type.getText().toString().trim());
+                    if (!address.getText().toString().trim().isEmpty()) draft.put("addr", address.getText().toString().trim());
+                    if (!value.getText().toString().trim().isEmpty()) draft.put("value", value.getText().toString().trim());
+                    if ("patch".equalsIgnoreCase(operation)) {
+                        if (draft.optString("addr", "").trim().isEmpty()) throw new IllegalArgumentException("Patch address is required.");
+                        if ("hex".equalsIgnoreCase(draft.optString("type", "hex")) && parseHex(draft.optString("value", "")).length == 0) throw new IllegalArgumentException("Patch value must contain valid hex bytes.");
+                    }
+                    target.put(stepIndex, draft);
+                    onChanged.run();
+                } catch (Exception e) { toast("Step not saved: " + e.getMessage()); }
             }).show();
     }
 
