@@ -2418,6 +2418,7 @@ public class MainActivity extends Activity {
                     if (!Arrays.equals(u.original, restored))
                         throw new IOException("Restore verification failed at 0x" + Long.toHexString(u.address).toUpperCase(Locale.US) + ".");
                 }
+                runOffPatchSteps(p, cheat);
                 enabledCheats.remove(index);
                 return "Restored " + cheat.optString("name") + ".";
             }
@@ -2459,6 +2460,30 @@ public class MainActivity extends Activity {
             log(result);
             refreshCheatList();
         });
+    }
+
+    private void runOffPatchSteps(int processId, JSONObject cheat) throws Exception {
+        JSONArray off=cheat.optJSONArray("off");
+        if(off==null||off.length()==0)return;
+        for(int i=0;i<off.length();i++){
+            JSONObject step=off.optJSONObject(i);
+            if(step==null)throw new IllegalArgumentException("Off step "+(i+1)+" is not an object.");
+            String op=step.optString("op","").toLowerCase(Locale.US);
+            if(!"patch".equals(op))throw new IllegalArgumentException("V1 mobile supports patch steps only in the off list; unsupported step: "+op);
+            long address=resolveAddress(step.getString("addr"),processId);
+            byte[] value=encodeCheatValue(step.optString("type","hex"),step.optString("value",""),step.optBoolean("nul",false));
+            if(value.length==0)throw new IllegalArgumentException("Off patch step "+(i+1)+" has an empty value.");
+            byte[] before=client.read(processId,address,value.length);
+            try{
+                client.write(processId,address,value);
+                byte[] verify=client.read(processId,address,value.length);
+                if(!Arrays.equals(value,verify))throw new IOException("Off patch verification failed at 0x"+Long.toHexString(address).toUpperCase(Locale.US)+".");
+            }catch(Exception failure){
+                try{client.write(processId,address,before);byte[] back=client.read(processId,address,before.length);if(!Arrays.equals(before,back))throw new IOException("Off-step rollback verification failed.");}
+                catch(Exception rollback){failure.addSuppressed(rollback);}
+                throw failure;
+            }
+        }
     }
 
     private long resolveAddress(String expression, int processId) throws Exception {
