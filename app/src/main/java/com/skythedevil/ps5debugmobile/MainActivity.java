@@ -721,7 +721,7 @@ public class MainActivity extends Activity {
         String prompt=aiPromptInput.getText().toString().trim();
         if(prompt.isEmpty())return;
         if(!AiAssistant.isConfigured(this)){toast("Configure AI in this section first.");return;}
-        if(aiMessages.length()==0)aiMessages.put(new JSONObject().put("role","system").put("content",AI_SYSTEM_PROMPT));
+        if(aiMessages.length()==0)appendAiMessage("system",AI_SYSTEM_PROMPT);
         try{
             JSONObject user=new JSONObject();user.put("role","user");user.put("content",prompt+"\n\n[Current app context: "+aiRuntimeContext()+"]");
             aiMessages.put(user);saveAiConversation();renderAiConversation();aiPromptInput.setText("");
