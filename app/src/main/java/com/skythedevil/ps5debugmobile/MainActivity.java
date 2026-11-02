@@ -3061,10 +3061,11 @@ public class MainActivity extends Activity {
                 return "Restored " + cheat.optString("name") + ".";
             }
             List<UndoPatch> undo = new ArrayList<>();
+            List<String> stepOutput=new ArrayList<>();
             JSONArray steps = cheat.optJSONArray("steps");
             if (steps == null) throw new IllegalArgumentException("Cheat has no steps.");
             try {
-                applyPatchSteps(p, steps, undo, 0);
+                applyPatchSteps(p, steps, undo, stepOutput, 0);
             } catch (Exception applyFailure) {
                 Collections.reverse(undo);
                 for (UndoPatch u : undo) {
@@ -3079,14 +3080,16 @@ public class MainActivity extends Activity {
             }
             boolean runOnce = "once".equalsIgnoreCase(cheat.optString("mode", "toggle"));
             if (!runOnce) enabledCheats.put(index, undo);
-            return (runOnce ? "Ran " : "Applied ") + cheat.optString("name") + (runOnce ? " once." : ".");
+            StringBuilder report=new StringBuilder((runOnce ? "Ran " : "Applied ") + cheat.optString("name") + (runOnce ? " once." : "."));
+            for(String line:stepOutput)report.append("\\n").append(line);
+            return report.toString();
         }, result -> {
             log(result);
             refreshCheatList();
         });
     }
 
-    private void applyPatchSteps(int processId, JSONArray steps, List<UndoPatch> undo, int depth) throws Exception {
+    private void applyPatchSteps(int processId, JSONArray steps, List<UndoPatch> undo, List<String> stepOutput, int depth) throws Exception {
         if(depth>8)throw new IllegalArgumentException("Repeat steps are nested too deeply (maximum 8 levels).");
         for(int i=0;i<steps.length();i++){
             JSONObject step=steps.optJSONObject(i);
@@ -3099,14 +3102,21 @@ public class MainActivity extends Activity {
                 if(delay<0||delay>60000)throw new IllegalArgumentException("Repeat delay must be between 0 and 60000 ms.");
                 if(nested==null||nested.length()==0)throw new IllegalArgumentException("Repeat step "+(i+1)+" needs nested steps.");
                 for(int n=0;n<count;n++){
-                    applyPatchSteps(processId,nested,undo,depth+1);
+                    applyPatchSteps(processId,nested,undo,stepOutput,depth+1);
                     if(delay>0&&n<count-1)Thread.sleep(delay);
                 }
                 continue;
             }
-            if(!"patch".equals(op)&&!"write".equals(op)&&!"check".equals(op)&&!"nop".equals(op)&&!"code".equals(op))
-                throw new IllegalArgumentException("Supported steps: patch, write, check, nop, code and repeat. Unsupported step: "+op);
+            if(!"patch".equals(op)&&!"write".equals(op)&&!"check".equals(op)&&!"nop".equals(op)&&!"code".equals(op)&&!"read".equals(op))
+                throw new IllegalArgumentException("Supported steps: patch, write, check, read, nop, code and repeat. Unsupported step: "+op);
             long address=resolveAddress(step.getString("addr"),processId);
+            if("read".equals(op)){
+                int length=step.optInt("length",step.optInt("size",0));
+                if(length<1||length>4096)throw new IllegalArgumentException("Read step length must be 1–4096 bytes.");
+                byte[] observed=client.read(processId,address,length);
+                stepOutput.add("READ 0x"+Long.toHexString(address).toUpperCase(Locale.US)+" ["+length+"]: "+toHex(observed));
+                continue;
+            }
             byte[] patch;
             if("nop".equals(op)){
                 int length=step.optInt("length",step.optInt("size",0));
