@@ -1792,7 +1792,14 @@ public class MainActivity extends Activity {
                     gameName.setText(gameFile.optString("game"));titleId.setText(gameFile.optString("title_id"));gameVersion.setText(gameFile.optString("version"));
                     refreshCheatList();log("Imported "+gameFile.getJSONArray("cheats").length()+" supported cheat(s).");
                 }
-            } else if (requestCode == REQ_EXPORT_SHN) {\n                String shn=buildShnXml();\n                try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IOException("Could not open destination.");out.write(shn.getBytes(StandardCharsets.UTF_8));}\n                log("Exported SHN XML.");\n            } else if (requestCode == REQ_EXPORT_GOLDHEN) {
+            } else if (requestCode == REQ_EXPORT_SHN) {
+                String shn=buildShnXml();
+                try(OutputStream out=getContentResolver().openOutputStream(uri)){
+                    if(out==null)throw new IOException("Could not open destination.");
+                    out.write(shn.getBytes(StandardCharsets.UTF_8));
+                }
+                log("Exported SHN XML.");
+            } else if (requestCode == REQ_EXPORT_GOLDHEN) {
                 JSONObject goldhen=buildGoldHenJson();
                 try(OutputStream out=getContentResolver().openOutputStream(uri)){
                     if(out==null)throw new IOException("Could not open destination.");
