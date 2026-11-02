@@ -47,6 +47,8 @@ public class MainActivity extends Activity {
     private final ExecutorService cancelWorker = Executors.newSingleThreadExecutor();
     private PS5Client client;
     private boolean connected = false;
+    private volatile boolean exactScanRunning = false;
+    private volatile boolean exactScanCancel = false;
     private List<ProcessEntry> processes = new ArrayList<>();
     private List<MapEntry> maps = new ArrayList<>();
     private int selectedPid = -1;
@@ -266,8 +268,17 @@ public class MainActivity extends Activity {
         scanLength = field("Range size (max 16 MiB)", "1048576");
         scanBytes = field("Pattern (hex; ?? = wildcard)", "DE AD ?? EF");
         page.addView(scanAddress); page.addView(scanLength); page.addView(scanBytes);
+        LinearLayout exactScanActions = new LinearLayout(this);
         Button scan = button("SCAN RANGE", PANEL);
-        page.addView(scan);
+        Button cancelExactScan = button("CANCEL SCAN", PANEL);
+        exactScanActions.addView(scan, new LinearLayout.LayoutParams(0, dp(48), 1));
+        exactScanActions.addView(cancelExactScan, new LinearLayout.LayoutParams(0, dp(48), 1));
+        page.addView(exactScanActions);
+        cancelExactScan.setOnClickListener(v -> {
+            if (!exactScanRunning) { toast("No exact byte scan is running."); return; }
+            exactScanCancel = true;
+            log("Exact byte scan cancellation requested.");
+        });
         scanResult = text("No scan performed.", 12, MUTED, false);
         scanResult.setTypeface(Typeface.MONOSPACE);
         page.addView(scanResult);
@@ -1190,7 +1201,11 @@ public class MainActivity extends Activity {
 
     private void scanRange() {
         if (!connected) { toast("Connect to the PS5 first."); return; }
+        if (exactScanRunning) { toast("An exact byte scan is already running."); return; }
+        exactScanRunning = true;
+        exactScanCancel = false;
         runAsync("Scanning memory range", () -> {
+            try {
             int p = currentPid();
             long start = resolveAddress(scanAddress.getText().toString().trim(), p);
             int length = Integer.decode(scanLength.getText().toString().trim());
@@ -1208,6 +1223,7 @@ public class MainActivity extends Activity {
             byte[] tail = new byte[0];
             long scanned = 0;
             while (scanned < length && matches.size() < 200) {
+                if (exactScanCancel) break;
                 int n = (int)Math.min(chunkSize, length - scanned);
                 byte[] block = client.read(p, start + scanned, n);
                 byte[] combined = new byte[tail.length + block.length];
@@ -1233,11 +1249,12 @@ public class MainActivity extends Activity {
                 scanned += n;
             }
             StringBuilder out = new StringBuilder();
-            out.append("Scanned ").append(scanned).append(" bytes from 0x").append(Long.toHexString(start).toUpperCase(Locale.US));
+            out.append(exactScanCancel ? "Scan cancelled after " : "Scanned ").append(scanned).append(" bytes from 0x").append(Long.toHexString(start).toUpperCase(Locale.US));
             out.append("\nPattern: ").append(toHex(pattern)).append("\nMatches: ").append(matches.size());
             for (long m : matches) out.append("\n0x").append(Long.toHexString(m).toUpperCase(Locale.US));
             if (matches.size() == 200) out.append("\n(showing first 200)");
             return out.toString();
+            } finally { exactScanRunning = false; exactScanCancel = false; }
         }, value -> scanResult.setText(value));
     }
 
