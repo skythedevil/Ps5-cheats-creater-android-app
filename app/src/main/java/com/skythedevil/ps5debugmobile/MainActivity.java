@@ -2221,9 +2221,8 @@ public class MainActivity extends Activity {
                         if ("patch".equalsIgnoreCase(step.optString("op"))) {
                             if (step.optString("addr", "").trim().isEmpty())
                                 throw new IllegalArgumentException("Patch step " + (n + 1) + " needs an address.");
-                            if ("hex".equalsIgnoreCase(step.optString("type", "hex")) &&
-                                    parseHex(step.optString("value", "")).length == 0)
-                                throw new IllegalArgumentException("Patch step " + (n + 1) + " needs valid hex bytes.");
+                            if (encodeCheatValue(step.optString("type", "hex"), step.optString("value", ""), step.optBoolean("nul", false)).length == 0)
+                                throw new IllegalArgumentException("Patch step " + (n + 1) + " needs a non-empty valid value for its type.");
                         }
                     }
                     gameFile.getJSONArray("cheats").put(index, updated);
@@ -2358,7 +2357,7 @@ public class MainActivity extends Activity {
                     if (!value.getText().toString().trim().isEmpty()) draft.put("value", value.getText().toString().trim());
                     if ("patch".equalsIgnoreCase(operation)) {
                         if (draft.optString("addr", "").trim().isEmpty()) throw new IllegalArgumentException("Patch address is required.");
-                        if ("hex".equalsIgnoreCase(draft.optString("type", "hex")) && parseHex(draft.optString("value", "")).length == 0) throw new IllegalArgumentException("Patch value must contain valid hex bytes.");
+                        if (encodeCheatValue(draft.optString("type", "hex"), draft.optString("value", ""), draft.optBoolean("nul", false)).length == 0) throw new IllegalArgumentException("Patch value must be valid and non-empty for its type.");
                     }
                     target.put(stepIndex, draft);
                     onChanged.run();
@@ -2425,13 +2424,11 @@ public class MainActivity extends Activity {
                     JSONObject step = steps.getJSONObject(n);
                     String op = step.optString("op", "").toLowerCase(Locale.US);
                     if (!op.equals("patch")) throw new IllegalArgumentException("V1 mobile supports fixed 'patch' steps only. Unsupported step: " + op);
-                    if (!"hex".equalsIgnoreCase(step.optString("type", "hex"))) throw new IllegalArgumentException("Only hex patch steps are supported in V1.");
                     long address = resolveAddress(step.getString("addr"), p);
-                    byte[] patch = parseHex(step.getString("value"));
+                    byte[] patch = encodeCheatValue(step.optString("type", "hex"), step.optString("value", ""), step.optBoolean("nul", false));
                     if (patch.length == 0) throw new IllegalArgumentException("Empty patch step.");
                     byte[] old = client.read(p, address, patch.length);
-                    // Record the original bytes before attempting the write so rollback also
-                    // covers a write that reports an error after a partial transport operation.
+                    // Record original bytes before writing so a partial transport failure can roll back.
                     undo.add(new UndoPatch(address, old));
                     client.write(p, address, patch);
                     byte[] written = client.read(p, address, patch.length);
@@ -2480,6 +2477,38 @@ public class MainActivity extends Activity {
         }
         if (chosen == null) throw new IllegalArgumentException("Module not found: " + module);
         return chosen.start + offset;
+    }
+
+    private byte[] encodeCheatValue(String type, String value, boolean nul) {
+        String t=type==null?"hex":type.trim().toLowerCase(Locale.US);
+        switch(t) {
+            case "hex": case "bytes": return parseHex(value);
+            case "u8": case "i8": return new byte[]{(byte)Long.decode(value.trim()).longValue()};
+            case "u16": case "i16": return ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort((short)Long.decode(value.trim()).longValue()).array();
+            case "u32": case "i32": return ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt((int)Long.decode(value.trim()).longValue()).array();
+            case "u64": case "i64": case "ptr": {
+                String v=value.trim();long n;
+                try { n=Long.decode(v); }
+                catch(NumberFormatException ex) {
+                    if(v.matches("(?i)0x[0-9a-f]+")) n=Long.parseUnsignedLong(v.substring(2),16);
+                    else throw ex;
+                }
+                return ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(n).array();
+            }
+            case "f32": return ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putFloat(Float.parseFloat(value.trim())).array();
+            case "f64": return ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putDouble(Double.parseDouble(value.trim())).array();
+            case "utf8": case "utf-8": case "string": {
+                byte[] data=value.getBytes(StandardCharsets.UTF_8);
+                if(!nul)return data;
+                return Arrays.copyOf(data,data.length+1);
+            }
+            case "utf16": case "utf16le": case "utf-16le": {
+                byte[] data=value.getBytes(java.nio.charset.Charset.forName("UTF-16LE"));
+                if(!nul)return data;
+                return Arrays.copyOf(data,data.length+2);
+            }
+            default: throw new IllegalArgumentException("Unsupported patch value type: "+type);
+        }
     }
 
     private static byte[] parseHex(String input) {
