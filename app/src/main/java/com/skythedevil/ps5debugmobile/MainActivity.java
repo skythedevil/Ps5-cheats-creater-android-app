@@ -43,6 +43,8 @@ public class MainActivity extends Activity {
     private static final int REQ_EXPORT_MC4 = 25;
     private static final int REQ_IMPORT_ADDRESS_TABLE = 26;
     private static final int REQ_EXPORT_ADDRESS_TABLE = 27;
+    private static final int REQ_EXPORT_HEX_PAGE = 28;
+    private static final int REQ_IMPORT_HEX_PATCH = 29;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -58,7 +60,8 @@ public class MainActivity extends Activity {
     private final Map<Integer, List<UndoPatch>> enabledCheats = new HashMap<>();
 
     private EditText host, port, pid, readAddress, readLength, writeAddress, writeBytes;
-    private EditText scanAddress, scanLength, scanBytes;
+    private EditText scanAddress, scanLength, scanBytes,scanStringInput,scanMaxMatches;
+    private Spinner scanStringEncoding;
     private EditText pointerTarget,pointerOffset,pointerDepth,pointerBudget;
     private TextView pointerResult;
     private volatile boolean pointerCancel=false;
@@ -83,13 +86,29 @@ public class MainActivity extends Activity {
     private int turboValueType = 4;
     private int turboValueLength = 4;
     private EditText gameName, titleId, gameVersion, cheatName, cheatAddress, cheatBytes;
-    private TextView connectionStatus, processInfo, memoryResult, scanResult, cheatStatus, mapResult, debugResult, disasmResult;
+    private TextView connectionStatus, consoleInfo, processInfo, memoryResult, scanResult, cheatStatus, mapResult, debugResult, disasmResult;
+    private Button importExactMatchesButton;
+    private List<Long> lastExactMatches=new ArrayList<>();
+    private byte[] lastExactPattern=new byte[0];
     private EditText mapFilter, disasmAddress, disasmLength, xrefTarget, breakpointIndex, breakpointAddress, watchIndex, watchAddress, threadId;
+    private Spinner watchLengthSpinner, watchModeSpinner;
     private EditText stackRbp, stackRsp, stackDepth;
+    private EditText registerNameInput,registerValueInput,fpuXmm0Input;
+    private EditText remoteBufferSize,remoteBufferBytes,remoteCallAddress,remoteCallArguments;
+    private TextView remoteBufferInfo;
+    private long allocatedBufferAddress=0;
+    private int allocatedBufferLength=0,allocatedBufferPid=-1;
+    private byte[] lastGeneralRegisters=new byte[0],lastFpuRegisters=new byte[0];
+    private int lastRegisterTid=-1;
     private TextView stackResult,debugEventResult;
     private volatile boolean debugEventListening=false;
     private ServerSocket debugEventServer;
     private final ExecutorService debugEventWorker=Executors.newSingleThreadExecutor();
+    private final ExecutorService kernelLogWorker=Executors.newSingleThreadExecutor();
+    private volatile boolean kernelLogRunning=false;
+    private volatile Socket kernelLogSocket;
+    private Button kernelLogButton;
+    private TextView kernelLogView;
     private EditText asmAddress,asmSource,hookTarget,hookDetour,hookOriginal,hookLength,hookCaveAddress;
     private TextView asmResult,hookResult;
     private byte[] generatedHookPatch=new byte[0],generatedHookTrampoline=new byte[0],generatedHookOriginal=new byte[0],generatedHookCaveOriginal=new byte[0];
@@ -149,6 +168,11 @@ public class MainActivity extends Activity {
         connectionStatus = text("●  DISCONNECTED", 13, MUTED, true);
         connectionStatus.setPadding(0, dp(10), 0, dp(4));
         page.addView(connectionStatus);
+        Button queryConsoleInfo=button("QUERY PAYLOAD / FIRMWARE INFO",PANEL);
+        page.addView(queryConsoleInfo);
+        consoleInfo=text("Payload details not queried yet.",11,MUTED,false);
+        consoleInfo.setTypeface(Typeface.MONOSPACE);page.addView(consoleInfo);
+        queryConsoleInfo.setOnClickListener(v->queryConsoleInfo());
         connectButton.setOnClickListener(v -> connectOrDisconnect());
         discoverButton.setOnClickListener(v -> discoverConsole());
 
@@ -212,6 +236,12 @@ public class MainActivity extends Activity {
         hexNav.addView(hexPrevious, new LinearLayout.LayoutParams(0, dp(46), 1));
         hexNav.addView(hexNext, new LinearLayout.LayoutParams(0, dp(46), 1));
         page.addView(hexNav);
+        LinearLayout hexFileActions=new LinearLayout(this);hexFileActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button importHexPatch=button("LOAD PATCH FILE (.BIN)",PANEL),exportHexPage=button("EXPORT PAGE (.BIN)",PANEL);
+        hexFileActions.addView(importHexPatch,new LinearLayout.LayoutParams(0,dp(46),1));
+        hexFileActions.addView(exportHexPage,new LinearLayout.LayoutParams(0,dp(46),1));page.addView(hexFileActions);
+        importHexPatch.setOnClickListener(v->importHexPatchFile());
+        exportHexPage.setOnClickListener(v->exportHexEditorPage());
         LinearLayout hexActions = new LinearLayout(this);
         hexActions.setOrientation(LinearLayout.HORIZONTAL);
         Button hexWrite = button("WRITE + VERIFY", ACCENT);
@@ -227,7 +257,7 @@ public class MainActivity extends Activity {
         section(page, "03A1  TYPED VALUE INSPECTOR", "Interpret bytes at an offset in the loaded or edited hex page. This is read-only; use WRITE + VERIFY to commit edits.");
         hexTypedOffset=field("Byte offset from page start", "0");
         hexTypedType=new Spinner(this);
-        String[] hexTypes={"Byte unsigned","Byte signed","2-byte unsigned","2-byte signed","4-byte unsigned","4-byte signed","8-byte unsigned","8-byte signed","Float","Double","UTF-8 (remaining page)"};
+        String[] hexTypes={"Byte unsigned","Byte signed","2-byte unsigned","2-byte signed","4-byte unsigned","4-byte signed","8-byte unsigned","8-byte signed","Float","Double","UTF-8 (remaining page)","UTF-16LE (remaining page)"};
         hexTypedType.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,hexTypes));
         page.addView(hexTypedOffset); page.addView(hexTypedType);
         Button inspectTyped=button("INSPECT TYPED VALUE",PANEL);
@@ -292,6 +322,13 @@ public class MainActivity extends Activity {
         scanLength = field("Range size (max 16 MiB)", "1048576");
         scanBytes = field("Pattern (hex; ?? = wildcard)", "DE AD ?? EF");
         page.addView(scanAddress); page.addView(scanLength); page.addView(scanBytes);
+        scanMaxMatches=field("Maximum matches to collect (1–2000)","500");page.addView(scanMaxMatches);
+        scanStringInput=field("Text string to scan (UTF-8 / UTF-16LE)","");
+        scanStringEncoding=new Spinner(this);
+        scanStringEncoding.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"UTF-8","UTF-16LE"}));
+        page.addView(scanStringInput);page.addView(scanStringEncoding);
+        Button scanString=button("ENCODE STRING + SCAN",PANEL);page.addView(scanString);
+        scanString.setOnClickListener(v->scanStringPattern());
         LinearLayout exactScanActions = new LinearLayout(this);
         Button scan = button("SCAN RANGE", PANEL);
         Button cancelExactScan = button("CANCEL SCAN", PANEL);
@@ -306,6 +343,9 @@ public class MainActivity extends Activity {
         scanResult = text("No scan performed.", 12, MUTED, false);
         scanResult.setTypeface(Typeface.MONOSPACE);
         page.addView(scanResult);
+        importExactMatchesButton=button("ADD MATCHES TO ADDRESS TABLE",PANEL);page.addView(importExactMatchesButton);
+        importExactMatchesButton.setEnabled(false);
+        importExactMatchesButton.setOnClickListener(v->importExactMatchesToAddressTable());
         scan.setOnClickListener(v -> scanRange());
 
         section(page, "04B  TURBO VALUE SCANNER", "Uses the payload's server-side TurboScan engine on a separate connection. Start with an exact value, refine with Next Scan, then view results.");
@@ -334,6 +374,8 @@ public class MainActivity extends Activity {
         turboPageNav.addView(turboNextPage,new LinearLayout.LayoutParams(0,dp(48),1));
         turboPageNav.addView(turboReloadPage,new LinearLayout.LayoutParams(0,dp(48),1));
         page.addView(turboPageNav);
+        Button saveTurboPage=button("SAVE CURRENT PAGE TO ADDRESS TABLE",PANEL);page.addView(saveTurboPage);
+        saveTurboPage.setOnClickListener(v->saveTurboPageToAddressTable());
         Button turboFirst = button("TURBO FIRST SCAN", ACCENT);
         Button turboNext = button("NEXT SCAN (EXACT VALUE)", PANEL);
         Button turboGet = button("LOAD RESULTS PAGE", PANEL);
@@ -428,8 +470,12 @@ public class MainActivity extends Activity {
         bpRow.addView(bpOff, bpRight); page.addView(bpRow);
         watchIndex = field("Watchpoint slot (0–3)", "0");
         watchAddress = field("Watch address", "0x0");
-        page.addView(watchIndex); page.addView(watchAddress);
-        Button watchOn = button("SET WRITE WATCHPOINT", PANEL);
+        watchLengthSpinner=new Spinner(this);
+        watchLengthSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"1 byte","2 bytes","4 bytes","8 bytes"}));
+        watchModeSpinner=new Spinner(this);
+        watchModeSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Write access","Read / write access"}));
+        page.addView(watchIndex); page.addView(watchAddress); page.addView(watchLengthSpinner); page.addView(watchModeSpinner);
+        Button watchOn = button("SET HARDWARE WATCHPOINT", PANEL);
         Button watchOff = button("CLEAR WATCHPOINT", PANEL);
         page.addView(watchOn); page.addView(watchOff);
         Button attach = button("ATTACH DEBUGGER", ACCENT);
@@ -437,8 +483,48 @@ public class MainActivity extends Activity {
         Button threads = button("LIST THREADS", PANEL);
         threadId = field("Thread/LWP ID", "");
         Button regs = button("READ GENERAL REGISTERS", PANEL);
+        registerNameInput=field("Register name (e.g. rax, rip, rsp)", "rax");
+        registerValueInput=field("New register value (decimal or 0x hex)", "0x0");
+        Button writeRegister=button("WRITE REGISTER + VERIFY",PANEL);
+        Button readFpu=button("READ FPU / XMM / YMM STATE",PANEL);
+        fpuXmm0Input=field("XMM0 value (32 hex digits)", "");
+        Button writeXmm0=button("WRITE XMM0 + VERIFY",PANEL);
+        section(page,"06C  REMOTE MEMORY BUFFER","Allocate/free a target-process buffer and write data with read-back verification. Free only buffers allocated by this session.");
+        remoteBufferSize=field("Buffer size in bytes (1–1 MiB)","256");
+        remoteBufferBytes=field("Buffer data (hex)","00 00 00 00");
+        page.addView(remoteBufferSize);page.addView(remoteBufferBytes);
+        LinearLayout bufferActions=new LinearLayout(this);bufferActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button allocBuffer=button("ALLOCATE",PANEL),writeBuffer=button("WRITE + VERIFY",PANEL),freeBuffer=button("FREE",PANEL);
+        bufferActions.addView(allocBuffer,new LinearLayout.LayoutParams(0,dp(46),1));
+        bufferActions.addView(writeBuffer,new LinearLayout.LayoutParams(0,dp(46),1));
+        bufferActions.addView(freeBuffer,new LinearLayout.LayoutParams(0,dp(46),1));
+        page.addView(bufferActions);
+        remoteBufferInfo=text("No remote buffer allocated.",11,MUTED,false);remoteBufferInfo.setTypeface(Typeface.MONOSPACE);page.addView(remoteBufferInfo);
+        remoteCallAddress=field("Function address (must be executable)", "module(eboot.bin)+0x0");
+        remoteCallArguments=field("Six SysV args: rdi,rsi,rdx,rcx,r8,r9 (comma-separated)", "0,0,0,0,0,0");
+        page.addView(remoteCallAddress);page.addView(remoteCallArguments);
+        Button callFunction=button("CALL FUNCTION (STACK-SAFE TRAMPOLINE)",ACCENT);page.addView(callFunction);
+        TextView callWarning=text("Warning: wrong function addresses or arguments can still crash the game. Calls are never automatically retried.",10,MUTED,false);page.addView(callWarning);
+        callFunction.setOnClickListener(v->callRemoteFunction());
+        allocBuffer.setOnClickListener(v->allocateRemoteBuffer());
+        writeBuffer.setOnClickListener(v->writeRemoteBuffer());
+        freeBuffer.setOnClickListener(v->freeRemoteBuffer());
+
         Button step = button("SINGLE STEP PROCESS", PANEL);
-        page.addView(attach); page.addView(detach); page.addView(threads); page.addView(threadId); page.addView(regs); page.addView(step);
+        Button stepThread=button("STEP SELECTED THREAD",PANEL);
+        LinearLayout runControl=new LinearLayout(this);runControl.setOrientation(LinearLayout.HORIZONTAL);
+        Button pauseProcess=button("PAUSE PROCESS",PANEL),resumeProcess=button("RESUME PROCESS",PANEL);
+        runControl.addView(pauseProcess,new LinearLayout.LayoutParams(0,dp(46),1));
+        runControl.addView(resumeProcess,new LinearLayout.LayoutParams(0,dp(46),1));
+        page.addView(attach); page.addView(detach); page.addView(threads); page.addView(threadId); page.addView(regs);
+        page.addView(registerNameInput);page.addView(registerValueInput);page.addView(writeRegister);
+        page.addView(readFpu);page.addView(fpuXmm0Input);page.addView(writeXmm0);page.addView(step);page.addView(stepThread);page.addView(runControl);
+        stepThread.setOnClickListener(v->debugStepThread());
+        pauseProcess.setOnClickListener(v->setProcessPaused(true));
+        resumeProcess.setOnClickListener(v->setProcessPaused(false));
+        writeRegister.setOnClickListener(v->writeGeneralRegister());
+        readFpu.setOnClickListener(v->readFpuRegisters());
+        writeXmm0.setOnClickListener(v->writeXmm0());
         section(page, "06A  LIVE DEBUG EVENTS", "Listen on phone TCP port 755 before attaching. The payload connects back to this device with breakpoint, watchpoint and single-step register snapshots.");
         Button eventListen=button("START / RESTART EVENT LISTENER (TCP 755)",PANEL);page.addView(eventListen);
         debugEventResult=text("Listener stopped. Start it before attaching the debugger.",11,MUTED,false);debugEventResult.setTypeface(Typeface.MONOSPACE);page.addView(debugEventResult);
@@ -495,6 +581,8 @@ public class MainActivity extends Activity {
         cheatStatus = text("No game file loaded.", 12, MUTED, false);
         cheatStatus.setPadding(0, dp(10), 0, dp(6));
         page.addView(cheatStatus);
+        Button turnOffAll=button("TURN ALL ACTIVE CHEATS OFF",PANEL);page.addView(turnOffAll);
+        turnOffAll.setOnClickListener(v->turnAllCheatsOff());
         cheatList = new LinearLayout(this);
         cheatList.setOrientation(LinearLayout.VERTICAL);
         page.addView(cheatList);
@@ -506,13 +594,64 @@ public class MainActivity extends Activity {
         exportShnFile.setOnClickListener(v->exportShn());
         exportMc4File.setOnClickListener(v->exportMc4());
 
-        section(page, "08  ACTIVITY LOG", "Recent connection and operation results.");
+        section(page, "08  KERNEL LOG STREAM", "Live ps5debug-NG kernel log from TCP port 3232. Start and stop without blocking the app.");
+        kernelLogButton=button("START KERNEL LOG (TCP 3232)",PANEL);page.addView(kernelLogButton);
+        kernelLogView=text("Kernel log is stopped.",10,MUTED,false);kernelLogView.setTypeface(Typeface.MONOSPACE);
+        kernelLogView.setPadding(dp(8),dp(8),dp(8),dp(8));kernelLogView.setBackgroundColor(PANEL);
+        page.addView(kernelLogView,new LinearLayout.LayoutParams(-1,dp(190)));
+        kernelLogButton.setOnClickListener(v->{if(kernelLogRunning)stopKernelLog();else startKernelLog();});
+
+        section(page, "09  ACTIVITY LOG", "Recent connection and operation results.");
         logView = text("Ready.", 11, MUTED, false);
         logView.setTypeface(Typeface.MONOSPACE);
         page.addView(logView);
     }
 
     private TextView logView;
+
+    private void startKernelLog() {
+        final String ip=host.getText().toString().trim();
+        if(ip.isEmpty()){toast("Enter the PS5 IP address first.");return;}
+        if(kernelLogRunning)return;
+        kernelLogRunning=true;
+        kernelLogButton.setText("STOP KERNEL LOG");
+        kernelLogView.setText("Connecting to "+ip+":3232…");
+        kernelLogWorker.execute(()->{
+            Socket sock=new Socket();kernelLogSocket=sock;
+            try {
+                sock.connect(new InetSocketAddress(ip,3232),5000);
+                sock.setSoTimeout(1000);
+                InputStream input=sock.getInputStream();byte[] buffer=new byte[4096];
+                main.post(()->kernelLogView.setText("Connected to kernel log stream "+ip+":3232\n"));
+                while(kernelLogRunning&&!sock.isClosed()){
+                    int n;
+                    try{n=input.read(buffer);}catch(SocketTimeoutException timeout){continue;}
+                    if(n<0)break;
+                    if(n>0){String chunk=new String(buffer,0,n,StandardCharsets.UTF_8);main.post(()->appendKernelLog(chunk));}
+                }
+                if(kernelLogRunning)main.post(()->appendKernelLog("\n[Kernel log stream closed by console.]\n"));
+            }catch(Exception e){
+                if(kernelLogRunning)main.post(()->appendKernelLog("\n[Kernel log error: "+e.getMessage()+"]\n"));
+            }finally{
+                kernelLogRunning=false;kernelLogSocket=null;
+                try{sock.close();}catch(Exception ignored){}
+                main.post(()->{if(kernelLogButton!=null)kernelLogButton.setText("START KERNEL LOG (TCP 3232)");});
+            }
+        });
+    }
+    private void appendKernelLog(String chunk){
+        if(kernelLogView==null)return;
+        String current=kernelLogView.getText().toString()+chunk;
+        if(current.length()>24000)current=current.substring(current.length()-24000);
+        kernelLogView.setText(current);
+    }
+    private void stopKernelLog(){
+        kernelLogRunning=false;
+        Socket sock=kernelLogSocket;kernelLogSocket=null;
+        if(sock!=null)try{sock.close();}catch(Exception ignored){}
+        if(kernelLogButton!=null)kernelLogButton.setText("START KERNEL LOG (TCP 3232)");
+        if(kernelLogView!=null)appendKernelLog("\n[Kernel log stopped.]\n");
+    }
 
     private void section(LinearLayout parent, String heading, String detail) {
         LinearLayout box = new LinearLayout(this);
@@ -589,7 +728,22 @@ public class MainActivity extends Activity {
                 main.post(() -> onSuccess.accept(result));
             } catch (Exception ex) {
                 String message = ex.getMessage() == null ? ex.toString() : ex.getMessage();
+                boolean connectionLost=client!=null&&!client.isConnected();
+                if(connectionLost){
+                    try{client.close();}catch(Exception ignored){}
+                    client=null;connected=false;
+                    if(scanClient!=null)try{scanClient.close();}catch(Exception ignored){}
+                    scanClient=null;turboActive=false;
+                    addressAutoRefresh=false;addressHandler.removeCallbacks(addressRefreshTick);
+                    addressHandler.removeCallbacks(addressFreezeTick);
+                }
                 main.post(() -> {
+                    if(connectionLost){
+                        if(connectionStatus!=null){connectionStatus.setText("●  DISCONNECTED — reconnect required");connectionStatus.setTextColor(MUTED);}
+                        if(connectButton!=null)connectButton.setText("CONNECT TO PS5");
+                        if(addressAutoButton!=null)addressAutoButton.setText("AUTO REFRESH: OFF");
+                        log("Console connection lost; reconnect before retrying.");
+                    }
                     log(action + " failed: " + message);
                     Toast.makeText(this, message, Toast.LENGTH_LONG).show();
                 });
@@ -632,11 +786,19 @@ public class MainActivity extends Activity {
     private void connectOrDisconnect() {
         if (connected) {
             worker.execute(() -> {
-                if (client != null) client.close();
+                if(client!=null){
+                    if(allocatedBufferAddress!=0&&allocatedBufferLength>0&&allocatedBufferPid>0){
+                        try{client.free(allocatedBufferPid,allocatedBufferAddress,allocatedBufferLength);log("Freed session-owned remote buffer before disconnect.");}
+                        catch(Exception cleanup){log("Remote buffer cleanup warning: "+cleanup.getMessage());}
+                    }
+                    try{client.releaseTrampolinePools();}catch(Exception cleanup){log("Trampoline cleanup warning: "+cleanup.getMessage());}
+                    client.close();
+                }
                 if (scanClient != null) scanClient.close();
                 scanClient = null; turboActive = false;
                 client = null;
                 connected = false;
+                allocatedBufferAddress=0;allocatedBufferLength=0;allocatedBufferPid=-1;
                 main.post(() -> {
                     connectionStatus.setText("●  DISCONNECTED");
                     connectionStatus.setTextColor(MUTED);
@@ -665,6 +827,11 @@ public class MainActivity extends Activity {
             if(hasFrozenAddresses()){addressHandler.removeCallbacks(addressFreezeTick);addressHandler.post(addressFreezeTick);}
             refreshProcesses();
         });
+    }
+
+    private void queryConsoleInfo() {
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        runAsync("Querying payload and firmware information",()->client.consoleInfo(),consoleInfo::setText);
     }
 
     private void refreshProcesses() {
@@ -731,11 +898,13 @@ public class MainActivity extends Activity {
             int offset = Integer.parseInt(hexTypedOffset.getText().toString().trim());
             if (offset < 0 || offset >= data.length) throw new IllegalArgumentException("Offset must be inside the loaded page.");
             int type = hexTypedType.getSelectedItemPosition();
-            if (type == 10) {
+            if (type == 10 || type == 11) {
                 byte[] tail = Arrays.copyOfRange(data, offset, data.length);
-                int end = 0; while (end < tail.length && tail[end] != 0) end++;
-                String value = new String(tail, 0, end, StandardCharsets.UTF_8);
-                hexTypedResult.setText(String.format(Locale.US, "Address: 0x%X\\nOffset: %d\\nUTF-8: %s\\nBytes: %d", hexEditorBase + offset, offset, value, end));
+                int end=0;
+                if(type==10){while(end<tail.length&&tail[end]!=0)end++;}
+                else {while(end+1<tail.length&&!(tail[end]==0&&tail[end+1]==0))end+=2;if((end&1)!=0)end--;}
+                String value = new String(tail, 0, end, type==10?StandardCharsets.UTF_8:StandardCharsets.UTF_16LE);
+                hexTypedResult.setText(String.format(Locale.US, "Address: 0x%X\\nOffset: %d\\n%s: %s\\nBytes: %d", hexEditorBase + offset, offset, type==10?"UTF-8":"UTF-16LE", value, end));
                 return;
             }
             int size = type <= 1 ? 1 : type <= 3 ? 2 : (type <= 5 || type == 8) ? 4 : 8;
@@ -776,6 +945,22 @@ public class MainActivity extends Activity {
         } catch (Exception e) { toast("Cannot change page: " + e.getMessage()); }
     }
 
+    private void importHexPatchFile(){
+        if(hexEditorOriginal.length==0){toast("Load a memory page first so the patch length can be checked.");return;}
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.addCategory(Intent.CATEGORY_OPENABLE);intent.setType("application/octet-stream");
+        startActivityForResult(intent,REQ_IMPORT_HEX_PATCH);
+    }
+    private void exportHexEditorPage(){
+        if(hexEditorInput==null||hexEditorOriginal.length==0){toast("Load a hex page first.");return;}
+        try{
+            byte[] bytes=parseHex(hexEditorInput.getText().toString());
+            if(bytes.length==0||bytes.length>4096)throw new IllegalArgumentException("Export page must contain 1–4096 bytes.");
+            Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);intent.addCategory(Intent.CATEGORY_OPENABLE);intent.setType("application/octet-stream");
+            intent.putExtra(Intent.EXTRA_TITLE,String.format(Locale.US,"PS5-0x%016X.bin",hexEditorBase));
+            startActivityForResult(intent,REQ_EXPORT_HEX_PAGE);
+        }catch(Exception e){toast("Cannot export page: "+e.getMessage());}
+    }
+
     private void writeHexEditorPage(boolean restoreOriginal) {
         if (!connected) { toast("Connect to the PS5 first."); return; }
         if (hexEditorOriginal.length == 0) { toast("Load a memory page first."); return; }
@@ -804,13 +989,29 @@ public class MainActivity extends Activity {
 
     private void writeMemory() {
         if (!connected) { toast("Connect to the PS5 first."); return; }
-        runAsync("Writing memory", () -> {
+        runAsync("Writing memory with rollback and read-back verification", () -> {
             int p = currentPid();
             long address = resolveAddress(writeAddress.getText().toString().trim(), p);
             byte[] data = parseHex(writeBytes.getText().toString());
             if (data.length == 0 || data.length > 4096) throw new IllegalArgumentException("Write 1–4096 bytes.");
-            client.write(p, address, data);
-            return "Wrote " + data.length + " byte(s) at 0x" + Long.toHexString(address).toUpperCase(Locale.US);
+            byte[] original = client.read(p, address, data.length);
+            try {
+                client.write(p, address, data);
+                byte[] actual = client.read(p, address, data.length);
+                if (!Arrays.equals(data, actual)) throw new IOException("Write read-back did not match requested bytes.");
+                return "Wrote and verified " + data.length + " byte(s) at 0x" + Long.toHexString(address).toUpperCase(Locale.US);
+            } catch (Exception failure) {
+                try {
+                    client.write(p, address, original);
+                    byte[] restored = client.read(p, address, original.length);
+                    if (!Arrays.equals(original, restored))
+                        throw new IOException("Rollback read-back mismatch.");
+                } catch (Exception rollbackFailure) {
+                    throw new IOException("Memory write failed and automatic rollback could not be verified. Original error: "
+                        + failure.getMessage() + "; rollback error: " + rollbackFailure.getMessage(), failure);
+                }
+                throw new IOException("Memory write failed; original bytes were restored and verified. " + failure.getMessage(), failure);
+            }
         }, value -> {
             memoryResult.setText(value);
             log(value);
@@ -1111,6 +1312,14 @@ public class MainActivity extends Activity {
     private static int pointerLowerBound(List<PointerNode> a,long v){int lo=0,hi=a.size();while(lo<hi){int m=(lo+hi)>>>1;if(Long.compareUnsigned(a.get(m).value,v)<0)lo=m+1;else hi=m;}return lo;}
     private static int pointerUpperBound(List<PointerNode> a,long v){int lo=0,hi=a.size();while(lo<hi){int m=(lo+hi)>>>1;if(Long.compareUnsigned(a.get(m).value,v)<=0)lo=m+1;else hi=m;}return lo;}
 
+    private static final class MultiReadEntry {
+        final long address; final int length;
+        MultiReadEntry(long address,int length){this.address=address;this.length=length;}
+    }
+    private static final class MultiWriteEntry {
+        final long address; final byte[] data;
+        MultiWriteEntry(long address,byte[] data){this.address=address;this.data=data;}
+    }
     private static final class AddressEntry {
         String name, address, bytes; int type; boolean frozen;
         AddressEntry(String n,String a,String b,int t,boolean f){name=n;address=a;bytes=b;type=t;frozen=f;}
@@ -1155,11 +1364,13 @@ public class MainActivity extends Activity {
             LinearLayout actions=new LinearLayout(this);actions.setOrientation(LinearLayout.VERTICAL);
             LinearLayout firstRow=new LinearLayout(this);firstRow.setOrientation(LinearLayout.HORIZONTAL);
             LinearLayout secondRow=new LinearLayout(this);secondRow.setOrientation(LinearLayout.HORIZONTAL);
+            Button thirdRowCopy=button("COPY AS CHEAT",PANEL);
             Button read=button("READ",PANEL),edit=button("EDIT",PANEL),write=button("WRITE",ACCENT);
             Button freeze=button(e.frozen?"UNFREEZE":"FREEZE",e.frozen?GREEN:PANEL),remove=button("REMOVE",PANEL);
             for(Button b:new Button[]{read,edit,write})firstRow.addView(b,new LinearLayout.LayoutParams(0,dp(44),1));
             for(Button b:new Button[]{freeze,remove})secondRow.addView(b,new LinearLayout.LayoutParams(0,dp(44),1));
-            actions.addView(firstRow);actions.addView(secondRow);card.addView(actions);
+            actions.addView(firstRow);actions.addView(secondRow);actions.addView(thirdRowCopy);card.addView(actions);
+            thirdRowCopy.setOnClickListener(v->copyAddressAsCheat(index));
             addressRows.addView(card,new LinearLayout.LayoutParams(-1,-2));
             read.setOnClickListener(v->readAddressEntry(index));
             edit.setOnClickListener(v->editAddressEntry(index));
@@ -1167,6 +1378,21 @@ public class MainActivity extends Activity {
             freeze.setOnClickListener(v->{addressEntries.get(index).frozen=!addressEntries.get(index).frozen;saveAddressEntries();renderAddressEntries();if(hasFrozenAddresses()){addressHandler.removeCallbacks(addressFreezeTick);addressHandler.post(addressFreezeTick);}else addressHandler.removeCallbacks(addressFreezeTick);});
             remove.setOnClickListener(v->{addressEntries.remove(index);saveAddressEntries();renderAddressEntries();});
         }
+    }
+    private void copyAddressAsCheat(int index){
+        if(gameFile==null){toast("Create or import a game file first.");return;}
+        if(index<0||index>=addressEntries.size())return;
+        AddressEntry entry=addressEntries.get(index);
+        try{
+            JSONArray cheats=gameFile.optJSONArray("cheats");
+            if(cheats==null){cheats=new JSONArray();gameFile.put("cheats",cheats);}
+            JSONObject step=new JSONObject().put("op","patch").put("addr",entry.address).put("type","hex").put("value",entry.bytes);
+            JSONArray steps=new JSONArray().put(step);
+            JSONObject cheat=new JSONObject().put("name",entry.name).put("mode","toggle").put("enabled",true).put("steps",steps);
+            cheats.put(cheat);persistGameFile();refreshCheatList();
+            log("Copied address '"+entry.name+"' into the game cheat library as a toggle patch.");
+            toast("Address copied as a cheat.");
+        }catch(Exception e){toast("Could not create cheat: "+e.getMessage());}
     }
     private void readAddressEntry(int index) {
         if(!connected){toast("Connect to the PS5 first.");return;}
@@ -1215,14 +1441,40 @@ public class MainActivity extends Activity {
         ByteBuffer b=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
         switch(t){case 1:return Long.toString(raw[0]&255);case 2:return Byte.toString(raw[0]);case 3:return Integer.toString(b.getShort()&65535);case 4:return Short.toString(b.getShort());case 5:return Long.toString(b.getInt()&0xffffffffL);case 6:return Integer.toString(b.getInt());case 7:return Long.toUnsignedString(b.getLong());case 8:return Long.toString(b.getLong());case 9:return Float.toString(b.getFloat());case 10:return Double.toString(b.getDouble());default:return toHex(raw);}
     }
+    private void refreshAddressSnapshot(List<AddressEntry> entries,int processId) throws Exception {
+        // Keep each response bounded and avoid thousands of single-command round trips.
+        final int maxBatch=256;
+        for(int start=0;start<entries.size();start+=maxBatch){
+            int end=Math.min(entries.size(),start+maxBatch);
+            List<MultiReadEntry> requests=new ArrayList<>();
+            for(int i=start;i<end;i++){
+                AddressEntry e=entries.get(i);int length=parseHex(e.bytes).length;
+                if(length<1||length>4096)throw new IllegalArgumentException("Invalid read size for "+e.name);
+                requests.add(new MultiReadEntry(resolveAddress(e.address,processId),length));
+            }
+            List<byte[]> values=client.readMulti(processId,requests);
+            for(int i=0;i<values.size();i++)entries.get(start+i).bytes=toHex(values.get(i));
+        }
+    }
     private void refreshAddressEntries() {
         if(!connected){toast("Connect to the PS5 first.");return;}
-        runAsync("Refreshing address table",()->{for(AddressEntry e:addressEntries){long a=resolveAddress(e.address,currentPid());e.bytes=toHex(client.read(currentPid(),a,parseHex(e.bytes).length));}saveAddressEntries();return "Refreshed "+addressEntries.size()+" address entries.";},r->{renderAddressEntries();log(r);});
+        runAsync("Refreshing address table with bulk reads",()->{
+            List<AddressEntry> snapshot=new ArrayList<>(addressEntries);
+            refreshAddressSnapshot(snapshot,currentPid());
+            for(int i=0;i<snapshot.size();i++)addressEntries.get(i).bytes=snapshot.get(i).bytes;
+            saveAddressEntries();return "Bulk-refreshed "+snapshot.size()+" address entries.";
+        },r->{renderAddressEntries();log(r);});
     }
     private void refreshAddressEntriesQuietly(){
         if(!connected||addressRefreshBusy||addressEntries.isEmpty())return;
         addressRefreshBusy=true;
-        worker.execute(()->{try{for(AddressEntry e:addressEntries){long a=resolveAddress(e.address,currentPid());e.bytes=toHex(client.read(currentPid(),a,parseHex(e.bytes).length));}saveAddressEntries();main.post(()->{addressRefreshBusy=false;renderAddressEntries();});}catch(Exception ex){addressRefreshBusy=false;log("Auto-refresh stopped: "+ex.getMessage());addressAutoRefresh=false;main.post(()->{if(addressAutoButton!=null)addressAutoButton.setText("AUTO REFRESH: OFF");});}});
+        worker.execute(()->{try{
+            List<AddressEntry> snapshot=new ArrayList<>(addressEntries);
+            refreshAddressSnapshot(snapshot,currentPid());
+            for(int i=0;i<snapshot.size();i++)addressEntries.get(i).bytes=snapshot.get(i).bytes;
+            saveAddressEntries();
+            main.post(()->{addressRefreshBusy=false;renderAddressEntries();});
+        }catch(Exception ex){addressRefreshBusy=false;log("Auto-refresh stopped: "+ex.getMessage());addressAutoRefresh=false;main.post(()->{if(addressAutoButton!=null)addressAutoButton.setText("AUTO REFRESH: OFF");});}});
     }
     private boolean hasFrozenAddresses(){for(AddressEntry e:addressEntries)if(e.frozen)return true;return false;}
     private void setAllAddressFrozen(boolean freeze) {
@@ -1246,24 +1498,42 @@ public class MainActivity extends Activity {
         if(frozen.isEmpty())return;
         freezeWriteBusy=true;
         worker.execute(()->{
-            int applied=0;
             try {
                 int p=currentPid();
+                List<MultiWriteEntry> batch=new ArrayList<>();
                 for(AddressEntry e:frozen){
                     if(!connected || client==null)break;
                     byte[] value=parseHex(e.bytes);
                     if(value.length==0 || value.length>4096)throw new IllegalArgumentException("Invalid frozen value for "+e.name);
                     long a=resolveAddress(e.address,p);
-                    client.write(p,a,value);
-                    applied++;
+                    batch.add(new MultiWriteEntry(a,value));
                 }
-                if(applied>0)log("Freeze cycle applied "+applied+"/"+frozen.size()+" entries.");
+                if(batch.isEmpty())return;
+                byte[] statuses=client.writeMulti(p,batch);
+                int applied=0;
+                for(int i=0;i<statuses.length;i++){
+                    int status=statuses[i]&255;
+                    if(status==0)applied++;
+                    else log("Freeze entry '"+frozen.get(i).name+"' failed (payload status "+status+").");
+                }
+                log("Bulk freeze cycle: "+applied+"/"+batch.size()+" entries applied and payload-verified.");
             } catch(Exception ex) {
-                log("Freeze write failed after "+applied+" entr(y/ies): "+ex.getMessage());
+                log("Bulk freeze write failed: "+ex.getMessage());
             } finally {
                 freezeWriteBusy=false;
             }
         });
+    }
+
+    private void scanStringPattern(){
+        try{
+            String value=scanStringInput.getText().toString();
+            if(value.isEmpty())throw new IllegalArgumentException("Enter a non-empty text string.");
+            byte[] bytes=value.getBytes(scanStringEncoding.getSelectedItemPosition()==0?StandardCharsets.UTF_8:StandardCharsets.UTF_16LE);
+            if(bytes.length>64)throw new IllegalArgumentException("Encoded string exceeds the 64-byte exact scanner pattern limit.");
+            scanBytes.setText(toHex(bytes));
+            scanRange();
+        }catch(Exception e){toast("String scan: "+e.getMessage());}
     }
 
     private void scanRange() {
@@ -1271,25 +1541,34 @@ public class MainActivity extends Activity {
         if (exactScanRunning) { toast("An exact byte scan is already running."); return; }
         exactScanRunning = true;
         exactScanCancel = false;
+        lastExactMatches.clear();lastExactPattern=new byte[0];
+        if(importExactMatchesButton!=null)importExactMatchesButton.setEnabled(false);
         runAsync("Scanning memory range", () -> {
             try {
             int p = currentPid();
             long start = resolveAddress(scanAddress.getText().toString().trim(), p);
             int length = Integer.decode(scanLength.getText().toString().trim());
+            int maxMatches=Integer.parseInt(scanMaxMatches.getText().toString().trim());
+            if(maxMatches<1||maxMatches>2000)throw new IllegalArgumentException("Maximum matches must be 1–2000.");
             String patternText=scanBytes.getText().toString().trim();
             String[] tokens=patternText.split("[\\s,]+");
             if(tokens.length==0||tokens.length>64)throw new IllegalArgumentException("Pattern must contain 1–64 byte tokens.");
             byte[] pattern=new byte[tokens.length];boolean[] mask=new boolean[tokens.length];
             for(int k=0;k<tokens.length;k++){String token=tokens[k].trim();if(token.equals("?")||token.equals("??")){mask[k]=false;pattern[k]=0;}else{if(!token.matches("(?i)[0-9a-f]{2}"))throw new IllegalArgumentException("Use two-digit hex bytes or ?? wildcards.");pattern[k]=(byte)Integer.parseInt(token,16);mask[k]=true;}}
-            int anchor=-1;
-            for(int k=0;k<mask.length;k++)if(mask[k]){anchor=k;break;}
+            int anchor=-1;boolean exactPattern=true;
+            for(int k=0;k<mask.length;k++){if(mask[k])anchor=k;else exactPattern=false;}
             if(anchor<0)throw new IllegalArgumentException("Pattern cannot contain only wildcards; include at least one fixed byte.");
+            int[] badCharacterSkip=null;
+            if(exactPattern){
+                badCharacterSkip=new int[256];Arrays.fill(badCharacterSkip,pattern.length);
+                for(int k=0;k<pattern.length-1;k++)badCharacterSkip[pattern[k]&255]=pattern.length-1-k;
+            }
             if (length <= 0 || length > SCAN_MAX) throw new IllegalArgumentException("Scan range must be between 1 byte and 16 MiB.");
             List<Long> matches = new ArrayList<>();
             int chunkSize = 64 * 1024;
             byte[] tail = new byte[0];
             long scanned = 0;
-            while (scanned < length && matches.size() < 200) {
+            while (scanned < length && matches.size() < maxMatches) {
                 if (exactScanCancel) break;
                 int n = (int)Math.min(chunkSize, length - scanned);
                 byte[] block = client.read(p, start + scanned, n);
@@ -1297,19 +1576,27 @@ public class MainActivity extends Activity {
                 System.arraycopy(tail, 0, combined, 0, tail.length);
                 System.arraycopy(block, 0, combined, tail.length, block.length);
                 long combinedBase = start + scanned - tail.length;
-                for (int i = 0; i <= combined.length - pattern.length; i++) {
-                    // Check one fixed anchor byte first; most non-matches can skip the
-                    // remaining wildcard-aware comparisons, improving large-range scans.
-                    if (combined[i + anchor] != pattern[anchor]) continue;
-                    boolean same = true;
-                    for (int j = 0; j < pattern.length; j++) {
-                        if (mask[j] && combined[i+j] != pattern[j]) { same = false; break; }
+                int i=0,lastCandidate=combined.length-pattern.length;
+                while(i<=lastCandidate){
+                    boolean same=true;
+                    if(exactPattern){
+                        int j=pattern.length-1;
+                        while(j>=0&&combined[i+j]==pattern[j])j--;
+                        same=j<0;
+                    }else{
+                        // Check the rightmost fixed anchor before full wildcard comparison.
+                        if(combined[i+anchor]!=pattern[anchor])same=false;
+                        else for(int j=0;j<pattern.length;j++)if(mask[j]&&combined[i+j]!=pattern[j]){same=false;break;}
                     }
-                    if (same) {
-                        long at = combinedBase + i;
-                        if (at >= start + scanned - tail.length) matches.add(at);
-                        if (matches.size() >= 200) break;
+                    if(same){
+                        long at=combinedBase+i;
+                        if(at>=start+scanned-tail.length)matches.add(at);
+                        if(matches.size()>=maxMatches)break;
                     }
+                    if(exactPattern){
+                        int shift=badCharacterSkip[combined[i+pattern.length-1]&255];
+                        i+=Math.max(1,shift);
+                    }else i++;
                 }
                 int keep = Math.min(pattern.length - 1, combined.length);
                 tail = Arrays.copyOfRange(combined, combined.length - keep, combined.length);
@@ -1319,10 +1606,37 @@ public class MainActivity extends Activity {
             out.append(exactScanCancel ? "Scan cancelled after " : "Scanned ").append(scanned).append(" bytes from 0x").append(Long.toHexString(start).toUpperCase(Locale.US));
             out.append("\nPattern: ").append(toHex(pattern)).append("\nMatches: ").append(matches.size());
             for (long m : matches) out.append("\n0x").append(Long.toHexString(m).toUpperCase(Locale.US));
-            if (matches.size() == 200) out.append("\n(showing first 200)");
+            if (matches.size() == maxMatches && scanned < length) out.append("\n(match limit reached; increase the limit to collect more)");
+            lastExactMatches=new ArrayList<>(matches);lastExactPattern=pattern.clone();
             return out.toString();
             } finally { exactScanRunning = false; exactScanCancel = false; }
-        }, value -> scanResult.setText(value));
+        }, value -> {scanResult.setText(value);importExactMatchesButton.setEnabled(!lastExactMatches.isEmpty());});
+    }
+
+    private void importExactMatchesToAddressTable(){
+        if(!connected){toast("Connect to the PS5 to read the actual matched bytes before importing.");return;}
+        if(lastExactMatches.isEmpty()||lastExactPattern.length==0){toast("Run an exact scan first.");return;}
+        final List<Long> matches=new ArrayList<>(lastExactMatches);final int byteLength=lastExactPattern.length;
+        runAsync("Reading actual bytes for scan matches",()->{
+            int p=currentPid();List<AddressEntry> loaded=new ArrayList<>();
+            for(int offset=0;offset<matches.size();offset+=256){
+                int end=Math.min(matches.size(),offset+256);List<MultiReadEntry> requests=new ArrayList<>();
+                for(int n=offset;n<end;n++)requests.add(new MultiReadEntry(matches.get(n),byteLength));
+                List<byte[]> values=client.readMulti(p,requests);
+                if(values.size()!=requests.size())throw new IOException("Bulk read returned an incomplete match page.");
+                for(int n=0;n<values.size();n++)loaded.add(new AddressEntry("AOB "+String.format(Locale.US,"%016X",matches.get(offset+n)),"0x"+Long.toHexString(matches.get(offset+n)),toHex(values.get(n)),0,false));
+            }
+            return loaded;
+        },loaded->{
+            int added=0,skipped=0;
+            for(AddressEntry candidate:loaded){
+                boolean exists=false;for(AddressEntry e:addressEntries)if(e.address.equalsIgnoreCase(candidate.address)){exists=true;break;}
+                if(exists){skipped++;continue;}addressEntries.add(candidate);added++;
+            }
+            saveAddressEntries();renderAddressEntries();
+            log("Imported "+added+" scan matches using live memory bytes; "+skipped+" duplicates skipped.");
+            toast("Added "+added+" matches; "+skipped+" duplicates skipped.");
+        });
     }
 
     private byte[] encodeTurboValue(int type, String raw) {
@@ -1472,6 +1786,19 @@ public class MainActivity extends Activity {
                 log("Live value refreshed at 0x"+Long.toHexString(item.address).toUpperCase(Locale.US));
             } catch(Exception e) { toast("Could not display refreshed value: "+e.getMessage()); }
         });
+    }
+    private void saveTurboPageToAddressTable(){
+        if(lastTurboResults.isEmpty()){toast("Load a TurboScan result page first.");return;}
+        int added=0,skipped=0;
+        for(PS5Client.TurboResult item:lastTurboResults){
+            String address=String.format(Locale.US,"0x%016X",item.address);boolean exists=false;
+            for(AddressEntry entry:addressEntries)if(entry.address.equalsIgnoreCase(address)){exists=true;break;}
+            if(exists){skipped++;continue;}
+            addressEntries.add(new AddressEntry("Turbo result "+(addressEntries.size()+1),address,toHex(item.current),0,false));added++;
+        }
+        saveAddressEntries();renderAddressEntries();
+        log("Saved TurboScan page: "+added+" added, "+skipped+" already present.");
+        toast("Saved "+added+" result(s); skipped "+skipped+" duplicates.");
     }
     private void saveTurboResultToAddressTable(PS5Client.TurboResult item) {
         String address=String.format(Locale.US,"0x%016X",item.address);
@@ -1643,10 +1970,23 @@ public class MainActivity extends Activity {
                             String name=new String(packet,8,40,StandardCharsets.UTF_8).replace(String.valueOf((char)0),"").trim();
                             int regOff=48;
                             long rbp=ByteBuffer.wrap(packet,regOff+80,8).order(ByteOrder.LITTLE_ENDIAN).getLong();
-                            long rsp=ByteBuffer.wrap(packet,regOff+112,8).order(ByteOrder.LITTLE_ENDIAN).getLong();
-                            long rip=ByteBuffer.wrap(packet,regOff+120,8).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                            long rax=ByteBuffer.wrap(packet,regOff+112,8).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                            long rip=ByteBuffer.wrap(packet,regOff+136,8).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                            long rflags=ByteBuffer.wrap(packet,regOff+152,8).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                            long rsp=ByteBuffer.wrap(packet,regOff+160,8).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                            long dr6=ByteBuffer.wrap(packet,0x420+6*8,8).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                            int mxcsr=ByteBuffer.wrap(packet,0xE0+0x18,4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+                            StringBuilder hits=new StringBuilder();
+                            for(int slot=0;slot<4;slot++)if((dr6&(1L<<slot))!=0){if(hits.length()>0)hits.append(", ");hits.append("watchpoint ").append(slot);}
+                            if((dr6&(1L<<14))!=0){if(hits.length()>0)hits.append(", ");hits.append("single-step");}
+                            int signal=((status&0xFF)==0x7F)?(int)((status>>8)&0xFF):(int)(status&0x7F);
+                            String xmm0=toHex(Arrays.copyOfRange(packet,0xE0+0xA0,0xE0+0xA0+16));
                             String event="DEBUG EVENT RECEIVED\\nThread/LWP: "+lwp+" ("+name+")\\nWait status: 0x"+Long.toHexString(status).toUpperCase(Locale.US)
-                                +"\\nRIP: 0x"+String.format(Locale.US,"%016X",rip)+"\\nRBP: 0x"+String.format(Locale.US,"%016X",rbp)+"\\nRSP: 0x"+String.format(Locale.US,"%016X",rsp);
+                                +"  •  Signal: "+signal+"\\nRIP: 0x"+String.format(Locale.US,"%016X",rip)+"\\nRBP: 0x"+String.format(Locale.US,"%016X",rbp)
+                                +"\\nRSP: 0x"+String.format(Locale.US,"%016X",rsp)+"\\nRAX: 0x"+String.format(Locale.US,"%016X",rax)
+                                +"\\nRFLAGS: 0x"+String.format(Locale.US,"%016X",rflags)+"\\nDR6: 0x"+String.format(Locale.US,"%016X",dr6)
+                                +"\\nStop reason: "+(hits.length()==0?"signal / debugger stop":hits)
+                                +"\\nMXCSR: 0x"+String.format(Locale.US,"%08X",mxcsr)+"\\nXMM0: "+xmm0;
                             runOnUiThread(()->{if(debugEventResult!=null)debugEventResult.setText(event);if(threadId!=null)threadId.setText(String.valueOf(lwp));});
                         }catch(Exception e){runOnUiThread(()->debugEventResult.setText("Debug event packet error: "+e.getMessage()));}
                         finally{try{peer.close();}catch(Exception ignored){}}
@@ -1682,11 +2022,17 @@ public class MainActivity extends Activity {
 
     private void setWatchpoint(boolean enabled) {
         if (!connected) { toast("Connect to the PS5 first."); return; }
-        runAsync(enabled ? "Setting watchpoint" : "Clearing watchpoint", () -> {
+        runAsync(enabled ? "Setting hardware watchpoint" : "Clearing watchpoint", () -> {
             int slot = Integer.parseInt(watchIndex.getText().toString().trim());
             long address = resolveAddress(watchAddress.getText().toString().trim(), currentPid());
-            client.watchpoint(slot, enabled, address, enabled ? 8 : 0, enabled ? 1 : 0);
-            return (enabled ? "8-byte write watchpoint set" : "Watchpoint cleared") + " at slot " + slot;
+            int[] lengths={1,2,4,8};
+            int length=enabled?lengths[watchLengthSpinner.getSelectedItemPosition()]:0;
+            int mode=enabled?(watchModeSpinner.getSelectedItemPosition()==0?1:3):0;
+            if(enabled && Long.remainderUnsigned(address,length)!=0)
+                throw new IllegalArgumentException("Watch address must be aligned to the selected "+length+"-byte size.");
+            client.watchpoint(slot, enabled, address, length, mode);
+            return enabled?(length+"-byte "+(mode==1?"write":"read/write")+" hardware watchpoint set at slot "+slot)
+                :"Hardware watchpoint cleared at slot "+slot;
         }, debugResult::setText);
     }
 
@@ -1705,16 +2051,164 @@ public class MainActivity extends Activity {
         runAsync("Reading registers", () -> {
             int tid = Integer.parseInt(threadId.getText().toString().trim());
             byte[] r = client.getRegisters(tid);
-            String[] names = {"r15","r14","r13","r12","r11","r10","r9","r8","rdi","rsi","rbp","rbx","rdx","rcx","rsp","rip","rflags"};
-            StringBuilder b = new StringBuilder();
-            for (int i=0;i<names.length;i++) b.append(String.format(Locale.US, "%-7s %016X\\n", names[i], ByteBuffer.wrap(r, i*8, 8).order(ByteOrder.LITTLE_ENDIAN).getLong()));
+            lastGeneralRegisters=r.clone();lastRegisterTid=tid;
+            String[] names={"r15","r14","r13","r12","r11","r10","r9","r8","rdi","rsi","rbp","rbx","rdx","rcx","rax","trapno","fs","gs","err","es","ds","rip","cs","rflags","rsp","ss"};
+            int[] offsets={0,8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,124,126,128,132,134,136,144,152,160,168};
+            int[] widths={8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,4,2,2,4,2,2,8,8,8,8,8};
+            StringBuilder b=new StringBuilder("FreeBSD amd64 general register set\\n");
+            ByteBuffer data=ByteBuffer.wrap(r).order(ByteOrder.LITTLE_ENDIAN);
+            for(int i=0;i<names.length;i++){
+                String value;
+                if(widths[i]==8)value=String.format(Locale.US,"%016X",data.getLong(offsets[i]));
+                else if(widths[i]==4)value=String.format(Locale.US,"%08X",data.getInt(offsets[i]));
+                else value=String.format(Locale.US,"%04X",data.getShort(offsets[i])&0xFFFF);
+                b.append(String.format(Locale.US,"%-7s %s\\n",names[i],value));
+            }
             return b.toString();
         }, debugResult::setText);
+    }
+
+    private static int registerOffset(String name){
+        String[] names={"r15","r14","r13","r12","r11","r10","r9","r8","rdi","rsi","rbp","rbx","rdx","rcx","rax","rip","rflags","rsp"};
+        int[] offsets={0,8,16,24,32,40,48,56,64,72,80,88,96,104,112,136,152,160};
+        for(int i=0;i<names.length;i++)if(names[i].equalsIgnoreCase(name.trim()))return offsets[i];
+        return -1;
+    }
+    private void writeGeneralRegister(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        runAsync("Writing general register with rollback verification",()->{
+            int tid=Integer.parseInt(threadId.getText().toString().trim());
+            String name=registerNameInput.getText().toString().trim();
+            int offset=registerOffset(name);if(offset<0)throw new IllegalArgumentException("Unsupported register. Use a 64-bit GP register name.");
+            String raw=registerValueInput.getText().toString().trim();
+            long value=raw.startsWith("0x")||raw.startsWith("0X")?Long.parseUnsignedLong(raw.substring(2),16):Long.parseLong(raw);
+            byte[] before=client.getRegisters(tid),updated=before.clone();
+            ByteBuffer.wrap(updated).order(ByteOrder.LITTLE_ENDIAN).putLong(offset,value);
+            try{
+                client.setRegisters(tid,updated);
+                byte[] check=client.getRegisters(tid);
+                if(!Arrays.equals(updated,check))throw new IOException("Register read-back mismatch.");
+                lastGeneralRegisters=check.clone();lastRegisterTid=tid;
+                return name.toUpperCase(Locale.US)+" updated and verified: 0x"+Long.toHexString(value).toUpperCase(Locale.US);
+            }catch(Exception failure){
+                try{client.setRegisters(tid,before);if(!Arrays.equals(before,client.getRegisters(tid)))throw new IOException("register rollback mismatch");}
+                catch(Exception rollback){throw new IOException("Register write failed and rollback could not be verified: "+rollback.getMessage(),failure);}
+                throw new IOException("Register write failed; original register state restored: "+failure.getMessage(),failure);
+            }
+        },debugResult::setText);
+    }
+    private void readFpuRegisters(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        runAsync("Reading FPU/XMM/YMM state",()->{
+            int tid=Integer.parseInt(threadId.getText().toString().trim());
+            byte[] state=client.getFpuRegisters(tid);lastFpuRegisters=state.clone();
+            int mxcsr=ByteBuffer.wrap(state,0x18,4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            byte[] xmm0=Arrays.copyOfRange(state,0xA0,0xB0);
+            return "FPU/XSTATE image: "+state.length+" bytes\\nMXCSR: 0x"+String.format(Locale.US,"%08X",mxcsr)+"\\nXMM0: "+toHex(xmm0)
+                +"\\nYMM0 upper: "+toHex(Arrays.copyOfRange(state,0x240,0x250))+"\\nFull snapshot retained for safe XMM0 edits.";
+        },value->{debugResult.setText(value);fpuXmm0Input.setText(toHex(Arrays.copyOfRange(lastFpuRegisters,0xA0,0xB0)));});
+    }
+    private void writeXmm0(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        runAsync("Writing XMM0 with full xstate rollback",()->{
+            int tid=Integer.parseInt(threadId.getText().toString().trim());
+            byte[] value=parseHex(fpuXmm0Input.getText().toString());
+            if(value.length!=16)throw new IllegalArgumentException("XMM0 requires exactly 16 bytes (32 hex digits).");
+            byte[] before=client.getFpuRegisters(tid),updated=before.clone();
+            System.arraycopy(value,0,updated,0xA0,16);
+            try{
+                client.setFpuRegisters(tid,updated);
+                byte[] check=client.getFpuRegisters(tid);
+                if(!Arrays.equals(updated,check))throw new IOException("FPU/XMM read-back mismatch.");
+                lastFpuRegisters=check.clone();return "XMM0 written and verified. Other FPU/YMM state was preserved.";
+            }catch(Exception failure){
+                try{client.setFpuRegisters(tid,before);if(!Arrays.equals(before,client.getFpuRegisters(tid)))throw new IOException("FPU rollback mismatch");}
+                catch(Exception rollback){throw new IOException("XMM0 write failed and xstate rollback could not be verified: "+rollback.getMessage(),failure);}
+                throw new IOException("XMM0 write failed; original xstate restored: "+failure.getMessage(),failure);
+            }
+        },debugResult::setText);
+    }
+
+    private void allocateRemoteBuffer(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        if(allocatedBufferAddress!=0){toast("Free the existing remote buffer first.");return;}
+        runAsync("Allocating remote process buffer",()->{
+            int size=Integer.parseInt(remoteBufferSize.getText().toString().trim());
+            if(size<1||size>1024*1024)throw new IllegalArgumentException("Buffer size must be 1 byte–1 MiB.");
+            int targetPid=currentPid();
+            long address=client.alloc(targetPid,size);
+            allocatedBufferAddress=address;allocatedBufferLength=size;allocatedBufferPid=targetPid;
+            return "Allocated "+size+" bytes at 0x"+Long.toHexString(address).toUpperCase(Locale.US);
+        },value->remoteBufferInfo.setText(value));
+    }
+    private void writeRemoteBuffer(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        if(allocatedBufferAddress==0||allocatedBufferLength<=0){toast("Allocate a buffer first.");return;}
+        runAsync("Writing remote buffer with rollback verification",()->{
+            byte[] data=parseHex(remoteBufferBytes.getText().toString());
+            if(data.length==0||data.length>allocatedBufferLength)throw new IllegalArgumentException("Data must be 1 byte through the allocated buffer size.");
+            int p=allocatedBufferPid;if(p<=0)throw new IOException("The owning process session is no longer available.");
+            byte[] before=client.read(p,allocatedBufferAddress,data.length);
+            try{
+                client.write(p,allocatedBufferAddress,data);
+                if(!Arrays.equals(data,client.read(p,allocatedBufferAddress,data.length)))throw new IOException("Buffer read-back mismatch.");
+                return "Wrote and verified "+data.length+" bytes at 0x"+Long.toHexString(allocatedBufferAddress).toUpperCase(Locale.US);
+            }catch(Exception failure){
+                try{client.write(p,allocatedBufferAddress,before);if(!Arrays.equals(before,client.read(p,allocatedBufferAddress,before.length)))throw new IOException("buffer rollback mismatch");}
+                catch(Exception rollback){throw new IOException("Buffer write failed and rollback could not be verified: "+rollback.getMessage(),failure);}
+                throw new IOException("Buffer write failed; original bytes restored: "+failure.getMessage(),failure);
+            }
+        },remoteBufferInfo::setText);
+    }
+    private void freeRemoteBuffer(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        if(allocatedBufferAddress==0||allocatedBufferLength<=0){toast("No session-owned remote buffer to free.");return;}
+        runAsync("Freeing remote process buffer",()->{
+            long address=allocatedBufferAddress;int size=allocatedBufferLength;int ownerPid=allocatedBufferPid;
+            if(ownerPid<=0)throw new IOException("The owning process ID is not available.");
+            client.free(ownerPid,address,size);
+            allocatedBufferAddress=0;allocatedBufferLength=0;allocatedBufferPid=-1;
+            return "Freed remote buffer at 0x"+Long.toHexString(address).toUpperCase(Locale.US)+" ("+size+" bytes).";
+        },remoteBufferInfo::setText);
+    }
+
+    private void callRemoteFunction(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        runAsync("Calling remote function through safe trampoline",()->{
+            int p=currentPid();long target=resolveAddress(remoteCallAddress.getText().toString().trim(),p);
+            String[] parts=remoteCallArguments.getText().toString().trim().split("[,\\s]+");
+            if(parts.length>6)throw new IllegalArgumentException("Enter no more than six arguments.");
+            long[] args=new long[6];
+            for(int i=0;i<parts.length;i++){
+                String value=parts[i].trim();
+                args[i]=value.startsWith("0x")||value.startsWith("0X")?Long.parseUnsignedLong(value.substring(2),16):Long.parseLong(value);
+            }
+            boolean executable=false;
+            for(MapEntry map:client.maps(p))if((map.prot&4)!=0&&Long.compareUnsigned(target,map.start)>=0&&Long.compareUnsigned(target,map.end)<0){executable=true;break;}
+            if(!executable)throw new IOException("Function address is not inside an executable memory map.");
+            long result=client.callSafe(p,target,args);
+            return "Remote call completed once.\\nTarget: 0x"+Long.toHexString(target).toUpperCase(Locale.US)
+                +"\\nRAX: 0x"+Long.toHexString(result).toUpperCase(Locale.US);
+        },debugResult::setText);
     }
 
     private void debugStep() {
         if (!connected) { toast("Connect to the PS5 first."); return; }
         runAsync("Single stepping process", () -> { client.debugStep(); return "Single-step command accepted."; }, debugResult::setText);
+    }
+    private void debugStepThread(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        runAsync("Single stepping selected thread",()->{
+            int tid=Integer.parseInt(threadId.getText().toString().trim());
+            client.debugStepThread(tid);return "Single-step command accepted for LWP "+tid+".";
+        },debugResult::setText);
+    }
+    private void setProcessPaused(boolean pause){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        runAsync(pause?"Pausing process":"Resuming process",()->{
+            client.debugContinue(pause?1:0);
+            return pause?"Process stop (SIGSTOP) accepted.":"Process resume accepted.";
+        },debugResult::setText);
     }
 
     private void readCallStack() {
@@ -1944,6 +2438,25 @@ public class MainActivity extends Activity {
                 addressEntries.clear();addressEntries.addAll(loaded);saveAddressEntries();renderAddressEntries();
                 addressHandler.removeCallbacks(addressFreezeTick);if(hasFrozenAddresses()&&connected)addressHandler.post(addressFreezeTick);
                 log("Loaded "+loaded.size()+" address entries from file. Freeze flags were reset for safety; freeze entries manually after checking the process.");
+            } else if (requestCode == REQ_IMPORT_HEX_PATCH) {
+                byte[] patch;
+                try(InputStream in=getContentResolver().openInputStream(uri);ByteArrayOutputStream buffer=new ByteArrayOutputStream()){
+                    if(in==null)throw new IOException("Could not open patch file.");
+                    byte[] chunk=new byte[1024];int n;while((n=in.read(chunk))!=-1){if(buffer.size()+n>4096)throw new IllegalArgumentException("Patch file exceeds the 4096-byte page limit.");buffer.write(chunk,0,n);}
+                    patch=buffer.toByteArray();
+                }
+                if(patch.length!=hexEditorOriginal.length)throw new IllegalArgumentException("Patch file must be exactly "+hexEditorOriginal.length+" bytes to match the loaded page.");
+                hexEditorInput.setText(toHex(patch));
+                hexEditorInfo.setText("Patch file loaded ("+patch.length+" bytes). Original snapshot is unchanged; press WRITE + VERIFY to apply.");
+                log("Loaded a "+patch.length+"-byte patch file into the hex editor; no memory was written.");
+            } else if (requestCode == REQ_EXPORT_HEX_PAGE) {
+                byte[] bytes=parseHex(hexEditorInput.getText().toString());
+                if(bytes.length==0||bytes.length>4096)throw new IllegalArgumentException("Export page must contain 1–4096 bytes.");
+                try(OutputStream out=getContentResolver().openOutputStream(uri)){
+                    if(out==null)throw new IOException("Could not open destination.");
+                    out.write(bytes);
+                }
+                log("Exported "+bytes.length+" raw memory bytes from 0x"+Long.toHexString(hexEditorBase).toUpperCase(Locale.US)+".");
             } else if (requestCode == REQ_EXPORT_ADDRESS_TABLE) {
                 JSONObject table=new JSONObject();table.put("format","ps5-address-table/1");
                 JSONArray entries=new JSONArray();
@@ -2496,6 +3009,32 @@ public class MainActivity extends Activity {
         } catch (JSONException e) { toast(e.getMessage()); }
     }
 
+    private void turnAllCheatsOff(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        if(enabledCheats.isEmpty()){toast("No active toggle cheats to restore.");return;}
+        runAsync("Restoring all active cheats",()->{
+            int p=currentPid();List<Integer> indexes=new ArrayList<>(enabledCheats.keySet());
+            Collections.sort(indexes,Collections.reverseOrder());
+            JSONArray cheats=gameFile==null?null:gameFile.optJSONArray("cheats");
+            int restoredCount=0;
+            for(int index:indexes){
+                List<UndoPatch> undo=enabledCheats.get(index);
+                if(undo==null)continue;
+                List<UndoPatch> reverse=new ArrayList<>(undo);Collections.reverse(reverse);
+                for(UndoPatch patch:reverse){
+                    client.write(p,patch.address,patch.original);
+                    byte[] check=client.read(p,patch.address,patch.original.length);
+                    if(!Arrays.equals(check,patch.original))
+                        throw new IOException("Turn-off-all stopped: restore verification failed at 0x"+Long.toHexString(patch.address).toUpperCase(Locale.US)+". Remaining active cheats are retained.");
+                }
+                JSONObject cheat=cheats!=null&&index>=0&&index<cheats.length()?cheats.optJSONObject(index):null;
+                if(cheat!=null)runOffPatchSteps(p,cheat);
+                enabledCheats.remove(index);restoredCount++;
+            }
+            return "Restored "+restoredCount+" active cheat(s); all completed writes were verified.";
+        },result->{log(result);refreshCheatList();});
+    }
+
     private void toggleCheat(int index, JSONObject cheat) {
         if (!connected) { toast("Connect to the PS5 first."); return; }
         final boolean isOn = enabledCheats.containsKey(index);
@@ -2565,11 +3104,16 @@ public class MainActivity extends Activity {
                 }
                 continue;
             }
-            if(!"patch".equals(op))throw new IllegalArgumentException("V1 mobile supports patch steps and repeat groups containing patch steps only. Unsupported step: "+op);
+            if(!"patch".equals(op)&&!"write".equals(op)&&!"check".equals(op))
+                throw new IllegalArgumentException("V1 mobile supports patch/write/check steps and repeat groups containing those steps only. Unsupported step: "+op);
             long address=resolveAddress(step.getString("addr"),processId);
             byte[] patch=encodeCheatValue(step.optString("type","hex"),step.optString("value",""),step.optBoolean("nul",false));
-            if(patch.length==0)throw new IllegalArgumentException("Empty patch step.");
+            if(patch.length==0)throw new IllegalArgumentException("Empty "+op+" step.");
             byte[] original=client.read(processId,address,patch.length);
+            if("check".equals(op)){
+                if(!Arrays.equals(patch,original))throw new IOException("Check step "+(i+1)+" failed at 0x"+Long.toHexString(address).toUpperCase(Locale.US)+": memory does not match expected bytes.");
+                continue;
+            }
             undo.add(new UndoPatch(address,original));
             client.write(processId,address,patch);
             byte[] written=client.read(processId,address,patch.length);
@@ -2584,11 +3128,16 @@ public class MainActivity extends Activity {
             JSONObject step=off.optJSONObject(i);
             if(step==null)throw new IllegalArgumentException("Off step "+(i+1)+" is not an object.");
             String op=step.optString("op","").toLowerCase(Locale.US);
-            if(!"patch".equals(op))throw new IllegalArgumentException("V1 mobile supports patch steps only in the off list; unsupported step: "+op);
+            if(!"patch".equals(op)&&!"write".equals(op)&&!"check".equals(op))
+                throw new IllegalArgumentException("Off list supports patch/write/check steps only; unsupported step: "+op);
             long address=resolveAddress(step.getString("addr"),processId);
             byte[] value=encodeCheatValue(step.optString("type","hex"),step.optString("value",""),step.optBoolean("nul",false));
-            if(value.length==0)throw new IllegalArgumentException("Off patch step "+(i+1)+" has an empty value.");
+            if(value.length==0)throw new IllegalArgumentException("Off "+op+" step "+(i+1)+" has an empty value.");
             byte[] before=client.read(processId,address,value.length);
+            if("check".equals(op)){
+                if(!Arrays.equals(value,before))throw new IOException("Off check step "+(i+1)+" failed at 0x"+Long.toHexString(address).toUpperCase(Locale.US)+".");
+                continue;
+            }
             try{
                 client.write(processId,address,value);
                 byte[] verify=client.read(processId,address,value.length);
@@ -2689,10 +3238,12 @@ public class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         stopDebugEventListener();
+        stopKernelLog();
         super.onDestroy();
         worker.shutdownNow();
         cancelWorker.shutdownNow();
         debugEventWorker.shutdownNow();
+        kernelLogWorker.shutdownNow();
         if (client != null) client.close();
         if (scanClient != null) scanClient.close();
     }
@@ -2721,11 +3272,21 @@ public class MainActivity extends Activity {
     private static final class PS5Client {
         private static final int MAGIC = (int)0xFFAABBCC;
         private static final int SUCCESS = (int)0x80000000;
+        // Hard ceilings prevent malformed console responses or accidental callers from
+        // allocating unbounded buffers while the protocol stream is being decoded.
+        private static final int MAX_REQUEST_BYTES = 1024 * 1024;
+        private static final int MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
         private static final int CMD_VERSION = (int)0xBD000001;
+        private static final int CMD_FW_VERSION = (int)0xBD000500, CMD_BRANDING = (int)0xBD000501, CMD_PLATFORM_ID = (int)0xBD000502;
         private static final int CMD_TURBO_CAPS = (int)0xBDAACC10, CMD_TURBO_START = (int)0xBDAACC11, CMD_TURBO_COUNT = (int)0xBDAACC12, CMD_TURBO_GET = (int)0xBDAACC13, CMD_TURBO_END = (int)0xBDAACC14, CMD_TURBO_CANCEL = (int)0xBDAACC17, CMD_PROC_AUTH = (int)0xBDAACCFF;
         private boolean authenticated=false;
         private int activeTurboPid=0, activeTurboType=4, turboEngines=0;
         private static final int CMD_PROC_LIST = (int)0xBDAA0001;
+        private static final int CMD_PROC_ALLOC = (int)0xBDAA000B;
+        private static final int CMD_PROC_FREE = (int)0xBDAA000C;
+        private static final int CMD_PROC_CALL = (int)0xBDAA0006;
+        private static final int CMD_PROC_READ_MULTI = (int)0xBDAACC03;
+        private static final int CMD_PROC_WRITE_MULTI = (int)0xBDAACC04;
         private static final int CMD_PROC_READ = (int)0xBDAA0002;
         private static final int CMD_PROC_WRITE = (int)0xBDAA0003;
         private static final int CMD_PROC_MAPS = (int)0xBDAA0004;
@@ -2741,23 +3302,54 @@ public class MainActivity extends Activity {
         private static final int CMD_DEBUG_GET_THREAD_LIST = (int)0xBDBB0005;
         private static final int CMD_DEBUG_GETREGS = (int)0xBDBB0008;
         private static final int CMD_DEBUG_STEP = (int)0xBDBB0012;
+        private static final int CMD_DEBUG_STEP_THREAD = (int)0xBDBB0013;
+        private static final int CMD_DEBUG_CONTINUE = (int)0xBDBB0010;
+        private static final int TRAMP_SLOT=64,TRAMP_POOL=0x4000;
+        private static final class TrampolinePool {
+            long base;int used;final Map<Long,Long> slots=new HashMap<>();
+            TrampolinePool(long base){this.base=base;}
+        }
+        private final Map<Integer,TrampolinePool> trampolinePools=new HashMap<>();
+        private long lastRemoteCallMillis=0,lastHijackMillis=0;
         private Socket socket;
         private DataInputStream in;
         private OutputStream out;
 
+        synchronized String consoleInfo() throws IOException {
+            ensureConnected();
+            send(CMD_FW_VERSION,new byte[0]);
+            int firmware=readUShortLE();
+            send(CMD_BRANDING,new byte[0]);
+            int length=readIntLE();
+            if(length<1||length>4096)throw new IOException("Invalid payload branding length: "+length);
+            byte[] brandBytes=readBytes(length);
+            int split=0;while(split<brandBytes.length&&brandBytes[split]!=0)split++;
+            String branding=new String(brandBytes,0,split,StandardCharsets.UTF_8);
+            String capability=split<brandBytes.length?new String(brandBytes,split+1,brandBytes.length-split-1,StandardCharsets.UTF_8):"unknown";
+            send(CMD_PLATFORM_ID,new byte[0]);
+            int platform=readUShortLE();
+            return "Firmware: "+firmware+"\nProtocol: ps5debug-NG 1.3\nPlatform ID: "+platform
+                +"\nBrand: "+branding+"\nCapability level: "+capability;
+        }
+
         synchronized String connect(String host, int port) throws Exception {
             close();
-            socket = new Socket();
-            socket.connect(new InetSocketAddress(host, port), 8000);
-            socket.setSoTimeout(15000);
-            socket.setTcpNoDelay(true);
-            in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
-            out = new BufferedOutputStream(socket.getOutputStream());
-            send(CMD_VERSION, new byte[0]);
-            int n = readIntLE();
-            if (n < 0 || n > 4096) throw new IOException("Unexpected version response length: " + n);
-            byte[] b = readBytes(n);
-            return new String(b, StandardCharsets.UTF_8);
+            try {
+                socket = new Socket();
+                socket.connect(new InetSocketAddress(host, port), 8000);
+                socket.setSoTimeout(15000);
+                socket.setTcpNoDelay(true);
+                in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
+                out = new BufferedOutputStream(socket.getOutputStream());
+                send(CMD_VERSION, new byte[0]);
+                int n = readIntLE();
+                if (n < 0 || n > 4096) throw new IOException("Unexpected version response length: " + n);
+                byte[] b = readBytes(n);
+                return new String(b, StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                close();
+                throw e;
+            }
         }
 
         synchronized void close() {
@@ -2836,22 +3428,39 @@ public class MainActivity extends Activity {
         synchronized void turboCancel(int pid) throws IOException {auth();send(CMD_TURBO_CANCEL,ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(pid).array());expectSuccess("TurboScan cancel");} 
 
         private void ensureConnected() throws IOException {
-            if (socket == null || socket.isClosed()) throw new IOException("Not connected to the PS5.");
+            if (socket == null || !socket.isConnected() || socket.isClosed() || in == null || out == null)
+                throw new IOException("Not connected to the PS5.");
         }
 
         private void send(int cmd, byte[] body) throws IOException {
             ensureConnected();
-            ByteBuffer h = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN);
-            h.putInt(MAGIC).putInt(cmd).putInt(body.length);
-            out.write(h.array());
-            if (body.length > 0) out.write(body);
-            out.flush();
+            if (body == null) throw new IOException("Protocol request body is missing.");
+            if (body.length > MAX_REQUEST_BYTES) throw new IOException("Protocol request exceeds the 4 MiB safety limit.");
+            try {
+                ByteBuffer h = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN);
+                h.putInt(MAGIC).putInt(cmd).putInt(body.length);
+                out.write(h.array());
+                if (body.length > 0) out.write(body);
+                out.flush();
+            } catch (IOException e) {
+                close(); // A partial frame makes the stream unsafe to reuse.
+                throw e;
+            }
         }
 
         private byte[] readBytes(int n) throws IOException {
+            if (n < 0 || n > MAX_RESPONSE_BYTES) {
+                close();
+                throw new IOException("Protocol response length is outside the 0–16 MiB safety limit: " + n);
+            }
             byte[] b = new byte[n];
-            in.readFully(b);
-            return b;
+            try {
+                in.readFully(b);
+                return b;
+            } catch (IOException e) {
+                close(); // EOF/timeouts can leave a partially consumed frame; fail closed.
+                throw new IOException("PS5 protocol response was interrupted; reconnect before retrying.", e);
+            }
         }
         private int readIntLE() throws IOException {
             byte[] b = readBytes(4);
@@ -2915,16 +3524,143 @@ public class MainActivity extends Activity {
             }
             return result;
         }
+        private void hijackGate() throws IOException {
+            long wait=150-(System.currentTimeMillis()-lastHijackMillis);
+            if(wait>0)try{Thread.sleep(wait);}catch(InterruptedException e){Thread.currentThread().interrupt();throw new IOException("Remote operation interrupted before dispatch.",e);}
+        }
+        private void hijackDone(){lastHijackMillis=System.currentTimeMillis();}
+        synchronized long alloc(int pid,int length) throws IOException {
+            if(length<=0||length>1024*1024)throw new IOException("Remote allocation must be 1 byte–1 MiB.");
+            hijackGate();ensureConnected();socket.setSoTimeout(30000);
+            try{
+                send(CMD_PROC_ALLOC,ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(pid).putInt(length).array());
+                expectSuccess("Remote allocation");return readLongLE();
+            }finally{if(isConnected())socket.setSoTimeout(15000);hijackDone();}
+        }
+        synchronized void free(int pid,long address,int length) throws IOException {
+            if(length<=0||length>1024*1024)throw new IOException("Remote free size must be 1 byte–1 MiB.");
+            hijackGate();
+            try{
+                send(CMD_PROC_FREE,ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(pid).putLong(address).putInt(length).array());
+                expectSuccess("Remote free");
+                TrampolinePool pool=trampolinePools.get(pid);
+                if(pool!=null&&pool.base==address)trampolinePools.remove(pid);
+            }finally{hijackDone();}
+        }
+        synchronized void releaseTrampolinePools() throws IOException {
+            IOException first=null;
+            List<Map.Entry<Integer,TrampolinePool>> pools=new ArrayList<>(trampolinePools.entrySet());
+            for(Map.Entry<Integer,TrampolinePool> entry:pools){
+                try{free(entry.getKey(),entry.getValue().base,TRAMP_POOL);}
+                catch(IOException e){if(first==null)first=e;else first.addSuppressed(e);}
+            }
+            if(first!=null)throw first;
+        }
+        private byte[] buildCallTrampoline(long target){
+            byte[] prefix=parseHex("49 89 E3 48 8D A4 24 00 F8 FF FF 48 83 E4 F0 41 53 41 53 48 81 EC 00 01 00 00 31 C0 49 BB");
+            byte[] suffix=parseHex("41 FF D3 48 81 C4 00 01 00 00 41 5B 5C C3");
+            ByteBuffer code=ByteBuffer.allocate(TRAMP_SLOT).order(ByteOrder.LITTLE_ENDIAN);
+            code.put(prefix).putLong(target).put(suffix);
+            while(code.hasRemaining())code.put((byte)0xCC);
+            return code.array();
+        }
+        private long trampolineFor(int pid,long target) throws IOException {
+            TrampolinePool pool=trampolinePools.get(pid);
+            if(pool!=null&&pool.slots.containsKey(target))return pool.slots.get(target);
+            if(pool==null||pool.used+TRAMP_SLOT>TRAMP_POOL){
+                long base=alloc(pid,TRAMP_POOL);
+                if(base==0)throw new IOException("Console returned a null trampoline allocation.");
+                pool=new TrampolinePool(base);trampolinePools.put(pid,pool);
+            }
+            long address=pool.base+pool.used;byte[] code=buildCallTrampoline(target);
+            write(pid,address,code);
+            if(!Arrays.equals(code,read(pid,address,code.length)))throw new IOException("Call trampoline write verification failed.");
+            pool.used+=TRAMP_SLOT;pool.slots.put(target,address);return address;
+        }
+        synchronized long callSafe(int pid,long target,long[] args) throws IOException {
+            if(args==null||args.length!=6)throw new IOException("Remote calls require exactly six argument slots.");
+            long entry=trampolineFor(pid,target);
+            hijackGate();
+            ByteBuffer body=ByteBuffer.allocate(68).order(ByteOrder.LITTLE_ENDIAN).putInt(pid).putLong(0L).putLong(entry);
+            for(long arg:args)body.putLong(arg);
+            ensureConnected();socket.setSoTimeout(30000);
+            try{
+                send(CMD_PROC_CALL,body.array());expectSuccess("Remote function call");
+                byte[] response=readBytes(12);ByteBuffer result=ByteBuffer.wrap(response).order(ByteOrder.LITTLE_ENDIAN);
+                int responsePid=result.getInt();long rax=result.getLong();
+                if(responsePid!=pid)throw new IOException("Remote call response PID mismatch.");
+                lastRemoteCallMillis=System.currentTimeMillis();return rax;
+            }finally{if(isConnected())socket.setSoTimeout(15000);hijackDone();}
+        }
         synchronized byte[] read(int pid, long address, int length) throws IOException {
             if (length <= 0 || length > 1024 * 1024) throw new IOException("Read size out of range.");
+            if (Long.compareUnsigned(address + (long)length - 1L, address) < 0)
+                throw new IOException("Memory read address range overflows.");
             ByteBuffer body = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
             body.putInt(pid).putLong(address).putInt(length);
             send(CMD_PROC_READ, body.array());
             expectSuccess("Memory read");
             return readBytes(length);
         }
+        synchronized List<byte[]> readMulti(int pid,List<MultiReadEntry> entries) throws IOException {
+            if(entries==null||entries.isEmpty())return new ArrayList<>();
+            if(entries.size()>0xFFFF)throw new IOException("Bulk read supports at most 65,535 entries.");
+            long total=0;
+            ByteBuffer descriptors=ByteBuffer.allocate(entries.size()*12).order(ByteOrder.LITTLE_ENDIAN);
+            for(MultiReadEntry entry:entries){
+                if(entry.length<=0||entry.length>1024*1024)throw new IOException("Bulk read entry size must be 1 byte–1 MiB.");
+                total+=entry.length;
+                if(total>MAX_RESPONSE_BYTES)throw new IOException("Bulk read batch exceeds the 16 MiB response limit.");
+                descriptors.putLong(entry.address).putInt(entry.length);
+            }
+            auth();
+            send(CMD_PROC_READ_MULTI,ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(pid).putInt(entries.size()).array());
+            expectSuccess("Bulk read acknowledgement");
+            try {
+                out.write(descriptors.array());out.flush();
+                byte[] raw=readBytes((int)total);
+                if(readLongLE()!=-1L)throw new IOException("Bulk read response is missing its end marker.");
+                List<byte[]> result=new ArrayList<>();int offset=0;
+                for(MultiReadEntry entry:entries){result.add(Arrays.copyOfRange(raw,offset,offset+entry.length));offset+=entry.length;}
+                return result;
+            } catch(IOException e) {
+                close(); // Missing/partial sentinel or payload means the stream cannot be reused safely.
+                throw e;
+            }
+        }
+
+        synchronized byte[] writeMulti(int pid,List<MultiWriteEntry> entries) throws IOException {
+            if(entries==null||entries.isEmpty())return new byte[0];
+            if(entries.size()>0xFFFF)throw new IOException("Bulk write supports at most 65,535 entries.");
+            ByteBuffer request=ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
+                .putInt(pid).putInt(entries.size()).putInt(1); // request per-entry status bytes
+            send(CMD_PROC_WRITE_MULTI,request.array());
+            expectSuccess("Bulk write acknowledgement");
+            try {
+                for(MultiWriteEntry entry:entries){
+                    if(entry.data==null||entry.data.length==0||entry.data.length>1024*1024)
+                        throw new IOException("Bulk write entry size must be 1 byte–1 MiB.");
+                    ByteBuffer header=ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
+                        .putLong(entry.address).putInt(entry.data.length);
+                    out.write(header.array());
+                    out.write(entry.data);
+                }
+                out.flush();
+                byte[] statuses=readBytes(entries.size());
+                expectSuccess("Bulk write completion");
+                return statuses;
+            } catch(IOException e) {
+                close(); // The streamed entry list may be incomplete; never reuse this connection.
+                throw e;
+            }
+        }
+
         synchronized void write(int pid, long address, byte[] data) throws IOException {
+            if (data == null) throw new IOException("Memory write data is missing.");
             if (data.length == 0) return;
+            if (data.length > 1024 * 1024) throw new IOException("Memory write size exceeds the 1 MiB command limit.");
+            if (Long.compareUnsigned(address + (long)data.length - 1L, address) < 0)
+                throw new IOException("Memory write address range overflows.");
             ByteBuffer body = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
             body.putInt(pid).putLong(address).putInt(data.length);
             send(CMD_PROC_WRITE, body.array());
@@ -2991,11 +3727,17 @@ public class MainActivity extends Activity {
         }
         synchronized void watchpoint(int index, boolean enabled, long address, int length, int type) throws IOException {
             if (index < 0 || index > 3) throw new IOException("Watchpoint slot must be 0–3.");
-            // DR7 encodings: RW=1 write, LEN=2 eight-byte.
-            int lenCode = length == 8 ? 2 : 0;
-            int breakType = type == 1 ? 1 : 0;
+            int lenCode;
+            if (!enabled) lenCode=0;
+            else if(length==1)lenCode=0;
+            else if(length==2)lenCode=1;
+            else if(length==8)lenCode=2;
+            else if(length==4)lenCode=3;
+            else throw new IOException("Hardware watchpoint size must be 1, 2, 4 or 8 bytes.");
+            if(enabled && type!=1 && type!=3)throw new IOException("Watchpoint mode must be write (1) or read/write (3).");
+            if(enabled && Long.remainderUnsigned(address,length)!=0)throw new IOException("Hardware watchpoint address is not aligned to its size.");
             ByteBuffer b = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN);
-            b.putInt(index).putInt(enabled ? 1 : 0).putInt(lenCode).putInt(breakType).putLong(address);
+            b.putInt(index).putInt(enabled ? 1 : 0).putInt(lenCode).putInt(enabled?type:0).putLong(address);
             send(CMD_DEBUG_SET_WATCHPOINT, b.array()); expectSuccess("Watchpoint");
         }
         synchronized List<Integer> threadList() throws IOException {
@@ -3007,8 +3749,33 @@ public class MainActivity extends Activity {
             send(CMD_DEBUG_GETREGS, ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(tid).array());
             expectSuccess("Get registers"); return readBytes(176);
         }
+        synchronized void setRegisters(int tid,byte[] registers) throws IOException {
+            if(registers==null||registers.length!=176)throw new IOException("General register image must be exactly 176 bytes.");
+            ByteBuffer h=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(tid).putInt(registers.length);
+            send((int)0xBDBB0009,h.array());expectSuccess("Set registers acknowledgement");
+            out.write(registers);out.flush();expectSuccess("Set registers completion");
+        }
+        synchronized byte[] getFpuRegisters(int tid) throws IOException {
+            send((int)0xBDBB000A,ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(tid).array());
+            expectSuccess("Get FPU registers");return readBytes(832);
+        }
+        synchronized void setFpuRegisters(int tid,byte[] registers) throws IOException {
+            if(registers==null||registers.length!=832)throw new IOException("FPU/YMM register image must be exactly 832 bytes.");
+            ByteBuffer h=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(tid).putInt(registers.length);
+            send((int)0xBDBB000B,h.array());expectSuccess("Set FPU registers acknowledgement");
+            out.write(registers);out.flush();expectSuccess("Set FPU registers completion");
+        }
         synchronized void debugStep() throws IOException {
             send(CMD_DEBUG_STEP, new byte[0]); expectSuccess("Single step");
+        }
+        synchronized void debugStepThread(int tid) throws IOException {
+            send(CMD_DEBUG_STEP_THREAD,ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(tid).array());
+            expectSuccess("Thread single step");
+        }
+        synchronized void debugContinue(int action) throws IOException {
+            if(action<0||action>1)throw new IOException("Debug continue action must be 0 (resume) or 1 (stop).");
+            send(CMD_DEBUG_CONTINUE,ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(action).array());
+            expectSuccess(action==1?"Process stop":"Process resume");
         }
         private static String cString(byte[] b, int off, int len) {
             int end = off;
