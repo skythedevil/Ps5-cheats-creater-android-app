@@ -822,9 +822,15 @@ public class MainActivity extends Activity {
                 continue;
             }
             if((op.equals("jmp")||op.equals("call"))&&p.length==2){
+                int indirect=x64Register(p[1].trim());
+                if(indirect>=0){
+                    if(indirect>=8)out.write(0x41);
+                    out.write(0xFF);out.write((op.equals("call")?0xD0:0xE0)+(indirect&7));
+                    continue;
+                }
                 long target=parseAddress(p[1].trim());long ip=base+out.size();
                 long rel=target-(ip+5);
-                if(rel<Integer.MIN_VALUE||rel>Integer.MAX_VALUE)throw new IOException("Relative branch target is out of 32-bit range; use mov rax, target then jmp rax (not yet supported).");
+                if(rel<Integer.MIN_VALUE||rel>Integer.MAX_VALUE)throw new IOException("Relative branch target is out of 32-bit range.");
                 out.write(op.equals("jmp")?0xE9:0xE8);
                 for(int i=0;i<4;i++)out.write((int)(rel>>>(i*8))&255);
                 continue;
