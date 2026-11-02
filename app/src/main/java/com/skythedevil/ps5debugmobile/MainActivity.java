@@ -1756,7 +1756,14 @@ public class MainActivity extends Activity {
                 gameVersion.setText(gameFile.optString("version"));
                 refreshCheatList();
                 log("Imported " + gameFile.getJSONArray("cheats").length() + " supported cheat(s).");
-            } else if (requestCode == REQ_EXPORT_GOLDHEN) {\n                JSONObject goldhen=buildGoldHenJson();\n                try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IOException("Could not open destination.");out.write(goldhen.toString(2).getBytes(StandardCharsets.UTF_8));}\n                log("Exported GoldHEN JSON.");\n            } else if (requestCode == REQ_EXPORT) {
+            } else if (requestCode == REQ_EXPORT_GOLDHEN) {
+                JSONObject goldhen=buildGoldHenJson();
+                try(OutputStream out=getContentResolver().openOutputStream(uri)){
+                    if(out==null)throw new IOException("Could not open destination.");
+                    out.write(goldhen.toString(2).getBytes(StandardCharsets.UTF_8));
+                }
+                log("Exported GoldHEN JSON.");
+            } else if (requestCode == REQ_EXPORT) {
                 try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                     if (out == null) throw new IOException("Could not open destination.");
                     out.write(gameFile.toString(2).getBytes(StandardCharsets.UTF_8));
