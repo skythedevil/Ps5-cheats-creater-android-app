@@ -2154,25 +2154,39 @@ public class MainActivity extends Activity {
                 throw new IllegalStateException("Title ID mismatch. Cheat file is for " + expected + ", selected process is " + info.titleId + ". Select the matching game/version.");
             }
             if (isOn) {
-                List<UndoPatch> undo = enabledCheats.remove(index);
-                Collections.reverse(undo);
-                for (UndoPatch u : undo) client.write(p, u.address, u.original);
+                List<UndoPatch> undo = enabledCheats.get(index);
+                if (undo == null) throw new IllegalStateException("Cheat restore state is missing; no bytes were changed.");
+                List<UndoPatch> reverse = new ArrayList<>(undo);
+                Collections.reverse(reverse);
+                for (UndoPatch u : reverse) client.write(p, u.address, u.original);
+                enabledCheats.remove(index);
                 return "Restored " + cheat.optString("name") + ".";
             }
             List<UndoPatch> undo = new ArrayList<>();
             JSONArray steps = cheat.optJSONArray("steps");
             if (steps == null) throw new IllegalArgumentException("Cheat has no steps.");
-            for (int n = 0; n < steps.length(); n++) {
-                JSONObject step = steps.getJSONObject(n);
-                String op = step.optString("op", "").toLowerCase(Locale.US);
-                if (!op.equals("patch")) throw new IllegalArgumentException("V1 mobile supports fixed 'patch' steps only. Unsupported step: " + op);
-                if (!"hex".equalsIgnoreCase(step.optString("type", "hex"))) throw new IllegalArgumentException("Only hex patch steps are supported in V1.");
-                long address = resolveAddress(step.getString("addr"), p);
-                byte[] patch = parseHex(step.getString("value"));
-                if (patch.length == 0) throw new IllegalArgumentException("Empty patch step.");
-                byte[] old = client.read(p, address, patch.length);
-                client.write(p, address, patch);
-                undo.add(new UndoPatch(address, old));
+            try {
+                for (int n = 0; n < steps.length(); n++) {
+                    JSONObject step = steps.getJSONObject(n);
+                    String op = step.optString("op", "").toLowerCase(Locale.US);
+                    if (!op.equals("patch")) throw new IllegalArgumentException("V1 mobile supports fixed 'patch' steps only. Unsupported step: " + op);
+                    if (!"hex".equalsIgnoreCase(step.optString("type", "hex"))) throw new IllegalArgumentException("Only hex patch steps are supported in V1.");
+                    long address = resolveAddress(step.getString("addr"), p);
+                    byte[] patch = parseHex(step.getString("value"));
+                    if (patch.length == 0) throw new IllegalArgumentException("Empty patch step.");
+                    byte[] old = client.read(p, address, patch.length);
+                    // Record the original bytes before attempting the write so rollback also
+                    // covers a write that reports an error after a partial transport operation.
+                    undo.add(new UndoPatch(address, old));
+                    client.write(p, address, patch);
+                }
+            } catch (Exception applyFailure) {
+                Collections.reverse(undo);
+                for (UndoPatch u : undo) {
+                    try { client.write(p, u.address, u.original); }
+                    catch (Exception rollbackFailure) { applyFailure.addSuppressed(rollbackFailure); }
+                }
+                throw applyFailure;
             }
             enabledCheats.put(index, undo);
             return "Applied " + cheat.optString("name") + ".";
