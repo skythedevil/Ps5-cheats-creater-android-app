@@ -2023,35 +2023,45 @@ public class MainActivity extends Activity {
 
     private void editCheat(int index, JSONObject cheat) {
         if (!enabledCheats.isEmpty()) { toast("Restore active cheats before editing."); return; }
-        JSONArray steps = cheat.optJSONArray("steps");
-        if (steps == null || steps.length() == 0) { toast("This cheat has no editable steps."); return; }
-        JSONObject first = steps.optJSONObject(0);
-        if (first == null || !"patch".equalsIgnoreCase(first.optString("op"))) {
-            toast("Only patch steps can currently be edited in the mobile editor."); return;
-        }
-        LinearLayout form = new LinearLayout(this);
-        form.setOrientation(LinearLayout.VERTICAL);
-        form.setPadding(dp(16), dp(8), dp(16), 0);
-        EditText name = field("Cheat name", cheat.optString("name", ""));
-        EditText address = field("Address expression", first.optString("addr", ""));
-        EditText bytes = field("Patch bytes (hex)", first.optString("value", ""));
-        form.addView(name); form.addView(address); form.addView(bytes);
-        new android.app.AlertDialog.Builder(this).setTitle("Edit cheat")
-            .setView(form).setNegativeButton("CANCEL", null)
+        EditText editor = new EditText(this);
+        editor.setText(cheat.toString(2));
+        editor.setGravity(Gravity.TOP | Gravity.START);
+        editor.setTextSize(13);
+        editor.setTypeface(Typeface.MONOSPACE);
+        editor.setMinLines(12);
+        editor.setMaxLines(22);
+        editor.setInputType(android.text.InputType.TYPE_CLASS_TEXT |
+                android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE |
+                android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        ScrollView container = new ScrollView(this);
+        container.setPadding(dp(14), dp(8), dp(14), dp(8));
+        container.addView(editor);
+        new android.app.AlertDialog.Builder(this).setTitle("Edit complete cheat JSON")
+            .setMessage("Edit the full cheat object, including every step, address, type and value. Keep valid JSON.")
+            .setView(container).setNegativeButton("CANCEL", null)
             .setPositiveButton("SAVE", (dialog, which) -> {
                 try {
-                    String n = name.getText().toString().trim();
-                    String a = address.getText().toString().trim();
-                    byte[] patch = parseHex(bytes.getText().toString());
-                    if (n.isEmpty() || a.isEmpty() || patch.length == 0)
-                        throw new IllegalArgumentException("Name, address and valid patch bytes are required.");
-                    cheat.put("name", n);
-                    first.put("addr", a);
-                    first.put("type", "hex");
-                    first.put("value", toHex(patch));
+                    JSONObject updated = new JSONObject(editor.getText().toString());
+                    String name = updated.optString("name", "").trim();
+                    JSONArray steps = updated.optJSONArray("steps");
+                    if (name.isEmpty() || steps == null || steps.length() == 0)
+                        throw new IllegalArgumentException("Cheat needs a name and at least one step.");
+                    for (int n = 0; n < steps.length(); n++) {
+                        JSONObject step = steps.optJSONObject(n);
+                        if (step == null || step.optString("op", "").trim().isEmpty())
+                            throw new IllegalArgumentException("Step " + (n + 1) + " must be a JSON object with an op.");
+                        if ("patch".equalsIgnoreCase(step.optString("op"))) {
+                            if (step.optString("addr", "").trim().isEmpty())
+                                throw new IllegalArgumentException("Patch step " + (n + 1) + " needs an address.");
+                            if ("hex".equalsIgnoreCase(step.optString("type", "hex")) &&
+                                    parseHex(step.optString("value", "")).length == 0)
+                                throw new IllegalArgumentException("Patch step " + (n + 1) + " needs valid hex bytes.");
+                        }
+                    }
+                    gameFile.getJSONArray("cheats").put(index, updated);
                     refreshCheatList();
-                    log("Updated cheat: " + n);
-                } catch (Exception e) { toast(e.getMessage()); }
+                    log("Updated complete cheat: " + name);
+                } catch (Exception e) { toast("Cheat not saved: " + e.getMessage()); }
             }).show();
     }
 
