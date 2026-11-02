@@ -355,7 +355,9 @@ public class MainActivity extends Activity {
         hookOriginal=field("Original bytes at hook site (hex)","");
         hookCaveAddress=field("Executable cave address for trampoline","0x0");
         hookOriginal.setSingleLine(false);hookOriginal.setMinLines(2);hookOriginal.setGravity(Gravity.TOP|Gravity.START);
-        page.addView(hookTarget);page.addView(hookDetour);page.addView(hookLength);page.addView(hookOriginal);page.addView(hookCaveAddress);
+        page.addView(hookTarget);page.addView(hookDetour);page.addView(hookLength);page.addView(hookOriginal);
+        Button hookRead=button("READ ORIGINAL BYTES FROM PS5",PANEL);page.addView(hookRead);
+        page.addView(hookCaveAddress);
         Button hookBuild=button("GENERATE HOOK PATCH + TRAMPOLINE",PANEL);page.addView(hookBuild);
         Button hookInstall=button("WRITE TRAMPOLINE + APPLY HOOK (VERIFY)",ACCENT);page.addView(hookInstall);
         Button hookRestore=button("RESTORE ORIGINAL HOOK-SITE BYTES",PANEL);page.addView(hookRestore);
@@ -364,6 +366,7 @@ public class MainActivity extends Activity {
         asmBuild.setOnClickListener(v->assembleMiniUi());
         asmWrite.setOnClickListener(v->writeAssembledCode());
         asmRestore.setOnClickListener(v->restoreAssembledCode());
+        hookRead.setOnClickListener(v->readHookOriginal());
         hookBuild.setOnClickListener(v->buildAbsoluteHook());
         hookInstall.setOnClickListener(v->installGeneratedHook());
         hookRestore.setOnClickListener(v->restoreGeneratedHook());
@@ -844,6 +847,17 @@ public class MainActivity extends Activity {
         String[] regs={"rax","rcx","rdx","rbx","rsp","rbp","rsi","rdi","r8","r9","r10","r11","r12","r13","r14","r15"};
         for(int i=0;i<regs.length;i++)if(regs[i].equalsIgnoreCase(name))return i;return -1;
     }
+
+    private void readHookOriginal(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        final long site;final int length;
+        try{site=parseAddress(hookTarget.getText().toString());length=Integer.parseInt(hookLength.getText().toString().trim());if(length<14||length>64)throw new IllegalArgumentException("Length must be 14–64 bytes.");}
+        catch(Exception e){toast("Hook read settings: "+e.getMessage());return;}
+        runAsync("Reading original hook-site bytes",()->toHex(client.read(currentPid(),site,length)),value->{
+            hookOriginal.setText(value);hookResult.setText("Original bytes captured from 0x"+Long.toHexString(site).toUpperCase(Locale.US)+". Review them, then generate the hook.");
+        });
+    }
+
     private void buildAbsoluteHook(){
         try{
             long site=parseAddress(hookTarget.getText().toString()),detour=parseAddress(hookDetour.getText().toString());
