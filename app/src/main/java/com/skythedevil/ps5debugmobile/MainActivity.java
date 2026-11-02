@@ -2251,9 +2251,11 @@ public class MainActivity extends Activity {
         panel.addView(help);
         LinearLayout actions = new LinearLayout(this);
         Button add = button("ADD STEP", PANEL);
+        Button addRepeat = button("ADD REPEAT", PANEL);
         Button edit = button("EDIT SELECTED", PANEL);
         Button remove = button("REMOVE", PANEL);
         actions.addView(add, new LinearLayout.LayoutParams(0, dp(44), 1));
+        actions.addView(addRepeat, new LinearLayout.LayoutParams(0, dp(44), 1));
         actions.addView(edit, new LinearLayout.LayoutParams(0, dp(44), 1));
         actions.addView(remove, new LinearLayout.LayoutParams(0, dp(44), 1));
         panel.addView(actions);
@@ -2285,13 +2287,21 @@ public class MainActivity extends Activity {
             if (selected[0] < 0 || selected[0] >= working.length()) { showPicker.run(); return; }
             JSONObject current = working.optJSONObject(selected[0]);
             if (current == null) { toast("Selected step is not a valid object."); return; }
-            showCheatStepEditor(working, selected[0], current, false, updateSelection);
+            if ("repeat".equalsIgnoreCase(current.optString("op"))) showRepeatGroupEditor(working, selected[0], current, false, updateSelection);
+            else showCheatStepEditor(working, selected[0], current, false, updateSelection);
         });
         add.setOnClickListener(v -> {
             JSONObject fresh = new JSONObject();
             try { fresh.put("op", "patch"); fresh.put("type", "hex"); fresh.put("addr", "0x"); fresh.put("value", "00"); }
             catch (JSONException e) { toast(e.getMessage()); return; }
             showCheatStepEditor(working, working.length(), fresh, true, updateSelection);
+        });
+        addRepeat.setOnClickListener(v -> {
+            try {
+                JSONObject repeat=new JSONObject();repeat.put("op","repeat");repeat.put("count",2);repeat.put("delay_ms",0);
+                JSONArray nested=new JSONArray();JSONObject patch=new JSONObject();patch.put("op","patch");patch.put("type","hex");patch.put("addr","0x");patch.put("value","00");nested.put(patch);repeat.put("steps",nested);
+                showRepeatGroupEditor(working,working.length(),repeat,true,updateSelection);
+            } catch(JSONException ex){toast("Could not create repeat group: "+ex.getMessage());}
         });
         remove.setOnClickListener(v -> {
             if (selected[0] < 0 || selected[0] >= working.length()) { showPicker.run(); return; }
@@ -2328,7 +2338,7 @@ public class MainActivity extends Activity {
                         if (step == null || step.optString("op", "").trim().isEmpty()) throw new IllegalArgumentException("Step " + (i + 1) + " needs an operation.");
                         if ("patch".equalsIgnoreCase(step.optString("op"))) {
                             if (step.optString("addr", "").trim().isEmpty()) throw new IllegalArgumentException("Patch step " + (i + 1) + " needs an address.");
-                            if ("hex".equalsIgnoreCase(step.optString("type", "hex")) && parseHex(step.optString("value", "")).length == 0) throw new IllegalArgumentException("Patch step " + (i + 1) + " needs valid hex bytes.");
+                            if (encodeCheatValue(step.optString("type","hex"),step.optString("value",""),step.optBoolean("nul",false)).length==0) throw new IllegalArgumentException("Patch step "+(i+1)+" needs a valid non-empty value for its type.");
                         }
                     }
                     cheat.put("steps", working);
@@ -2337,6 +2347,45 @@ public class MainActivity extends Activity {
                     log("Saved " + working.length() + " structured cheat step(s) for " + cheat.optString("name") + ".");
                 } catch (Exception e) { toast("Steps not saved: " + e.getMessage()); }
             }).show();
+    }
+
+    private void showRepeatGroupEditor(JSONArray target,int stepIndex,JSONObject original,boolean isNew,Runnable onChanged) {
+        JSONObject draft;
+        try{draft=new JSONObject(original.toString());}catch(JSONException e){toast(e.getMessage());return;}
+        LinearLayout fields=new LinearLayout(this);fields.setOrientation(LinearLayout.VERTICAL);fields.setPadding(dp(16),dp(8),dp(16),dp(4));
+        EditText count=new EditText(this);count.setSingleLine(true);count.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);count.setHint("Repeat count (1–1000)");count.setText(String.valueOf(draft.optInt("count",1)));fields.addView(count);
+        EditText delay=new EditText(this);delay.setSingleLine(true);delay.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);delay.setHint("Delay between repeats in ms (0–60000)");delay.setText(String.valueOf(draft.optInt("delay_ms",0)));fields.addView(delay);
+        EditText nested=new EditText(this);nested.setSingleLine(false);nested.setMinLines(5);nested.setGravity(android.view.Gravity.TOP);nested.setTypeface(android.graphics.Typeface.MONOSPACE);nested.setHint("Nested steps JSON");JSONArray initial=draft.optJSONArray("steps");nested.setText(initial==null?"[]":initial.toString(2));fields.addView(nested);
+        new android.app.AlertDialog.Builder(this).setTitle(isNew?"Add repeat group":"Edit repeat group").setMessage("Nested steps must be patch operations or repeat groups. Repeat count is limited to 1,000 and nesting depth to 8.")
+            .setView(fields).setNegativeButton("CANCEL",null).setPositiveButton("SAVE",(d,w)->{
+                try{
+                    int repetitions=Integer.parseInt(count.getText().toString().trim()),wait=Integer.parseInt(delay.getText().toString().trim());
+                    if(repetitions<1||repetitions>1000)throw new IllegalArgumentException("Repeat count must be 1–1000.");
+                    if(wait<0||wait>60000)throw new IllegalArgumentException("Delay must be 0–60000 ms.");
+                    JSONArray children=new JSONArray(nested.getText().toString());
+                    if(children.length()==0)throw new IllegalArgumentException("Add at least one nested step.");
+                    validatePatchTree(children,0);
+                    draft.put("op","repeat");draft.put("count",repetitions);draft.put("delay_ms",wait);draft.put("steps",children);
+                    if(isNew)target.put(draft);else target.put(stepIndex,draft);
+                    onChanged.run();
+                }catch(Exception ex){toast("Repeat group not saved: "+ex.getMessage());}
+            }).show();
+    }
+
+    private void validatePatchTree(JSONArray steps,int depth)throws Exception{
+        if(depth>8)throw new IllegalArgumentException("Repeat nesting cannot exceed 8 levels.");
+        for(int i=0;i<steps.length();i++){
+            JSONObject step=steps.optJSONObject(i);if(step==null)throw new IllegalArgumentException("Nested step "+(i+1)+" must be an object.");
+            String op=step.optString("op","").toLowerCase(Locale.US);
+            if("repeat".equals(op)){
+                int count=step.optInt("count",1),delay=step.optInt("delay_ms",0);JSONArray children=step.optJSONArray("steps");
+                if(count<1||count>1000||delay<0||delay>60000||children==null||children.length()==0)throw new IllegalArgumentException("Nested repeat "+(i+1)+" has invalid count, delay or children.");
+                validatePatchTree(children,depth+1);
+            }else if("patch".equals(op)){
+                if(step.optString("addr","").trim().isEmpty())throw new IllegalArgumentException("Nested patch "+(i+1)+" needs an address.");
+                if(encodeCheatValue(step.optString("type","hex"),step.optString("value",""),step.optBoolean("nul",false)).length==0)throw new IllegalArgumentException("Nested patch "+(i+1)+" has an invalid value.");
+            }else throw new IllegalArgumentException("Only patch and repeat operations can execute in this build (found "+op+").");
+        }
     }
 
     private void showCheatStepEditor(JSONArray target, int stepIndex, JSONObject original, boolean isNew, Runnable onChanged) {
