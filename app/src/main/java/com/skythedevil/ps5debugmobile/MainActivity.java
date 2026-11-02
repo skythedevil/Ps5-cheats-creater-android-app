@@ -1359,6 +1359,7 @@ public class MainActivity extends Activity {
     private void resolvePointerChains(){
         if(!connected){toast("Connect to the PS5 first.");return;}
         if(lastPointerHits.isEmpty()){toast("Run a pointer scan or load saved chains first.");return;}
+        pointerCancel=false;
         pointerResult.setText("Resolving saved chains against current process memory…");
         runAsync("Resolving pointer chains",()->{
             int pid=currentPid();List<MapEntry> maps=client.maps(pid);
