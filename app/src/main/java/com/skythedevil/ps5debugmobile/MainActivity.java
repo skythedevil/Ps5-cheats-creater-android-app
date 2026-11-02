@@ -1993,10 +1993,90 @@ public class MainActivity extends Activity {
             TextView detail = text(c.optString("mode", "toggle").toUpperCase(Locale.US) + "  •  " +
                     (c.optJSONArray("steps") == null ? 0 : c.optJSONArray("steps").length()) + " step(s)", 11, MUTED, false);
             row.addView(detail);
-            Button apply = button("APPLY / RESTORE", ACCENT);
-            row.addView(apply);
+            LinearLayout actions = new LinearLayout(this);
+            actions.setOrientation(LinearLayout.HORIZONTAL);
+            Button apply = button(enabledCheats.containsKey(idx) ? "RESTORE" : "APPLY", ACCENT);
+            Button edit = button("EDIT", PANEL);
+            Button up = button("UP", PANEL);
+            Button down = button("DOWN", PANEL);
+            Button remove = button("DELETE", PANEL);
+            actions.addView(apply, new LinearLayout.LayoutParams(0, dp(44), 2));
+            actions.addView(edit, new LinearLayout.LayoutParams(0, dp(44), 1));
+            actions.addView(up, new LinearLayout.LayoutParams(0, dp(44), 1));
+            actions.addView(down, new LinearLayout.LayoutParams(0, dp(44), 1));
+            actions.addView(remove, new LinearLayout.LayoutParams(0, dp(44), 1));
+            row.addView(actions);
             apply.setOnClickListener(v -> toggleCheat(idx, c));
+            edit.setOnClickListener(v -> editCheat(idx, c));
+            up.setEnabled(idx > 0 && enabledCheats.isEmpty());
+            down.setEnabled(idx < count - 1 && enabledCheats.isEmpty());
+            remove.setEnabled(enabledCheats.isEmpty());
+            edit.setEnabled(enabledCheats.isEmpty());
+            up.setOnClickListener(v -> moveCheat(idx, -1));
+            down.setOnClickListener(v -> moveCheat(idx, 1));
+            remove.setOnClickListener(v -> deleteCheat(idx));
         }
+    }
+
+    private void editCheat(int index, JSONObject cheat) {
+        if (!enabledCheats.isEmpty()) { toast("Restore active cheats before editing."); return; }
+        JSONArray steps = cheat.optJSONArray("steps");
+        if (steps == null || steps.length() == 0) { toast("This cheat has no editable steps."); return; }
+        JSONObject first = steps.optJSONObject(0);
+        if (first == null || !"patch".equalsIgnoreCase(first.optString("op"))) {
+            toast("Only patch steps can currently be edited in the mobile editor."); return;
+        }
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(16), dp(8), dp(16), 0);
+        EditText name = field("Cheat name", cheat.optString("name", ""));
+        EditText address = field("Address expression", first.optString("addr", ""));
+        EditText bytes = field("Patch bytes (hex)", first.optString("value", ""));
+        form.addView(name); form.addView(address); form.addView(bytes);
+        new android.app.AlertDialog.Builder(this).setTitle("Edit cheat")
+            .setView(form).setNegativeButton("CANCEL", null)
+            .setPositiveButton("SAVE", (dialog, which) -> {
+                try {
+                    String n = name.getText().toString().trim();
+                    String a = address.getText().toString().trim();
+                    byte[] patch = parseHex(bytes.getText().toString());
+                    if (n.isEmpty() || a.isEmpty() || patch.length == 0)
+                        throw new IllegalArgumentException("Name, address and valid patch bytes are required.");
+                    cheat.put("name", n);
+                    first.put("addr", a);
+                    first.put("type", "hex");
+                    first.put("value", toHex(patch));
+                    refreshCheatList();
+                    log("Updated cheat: " + n);
+                } catch (Exception e) { toast(e.getMessage()); }
+            }).show();
+    }
+
+    private void moveCheat(int index, int delta) {
+        if (gameFile == null || !enabledCheats.isEmpty()) { toast("Restore active cheats before reordering."); return; }
+        JSONArray cheats = gameFile.optJSONArray("cheats");
+        int target = index + delta;
+        if (cheats == null || target < 0 || target >= cheats.length()) return;
+        try {
+            JSONObject moving = cheats.getJSONObject(index);
+            JSONObject other = cheats.getJSONObject(target);
+            cheats.put(index, other);
+            cheats.put(target, moving);
+            refreshCheatList();
+        } catch (JSONException e) { toast(e.getMessage()); }
+    }
+
+    private void deleteCheat(int index) {
+        if (gameFile == null || !enabledCheats.isEmpty()) { toast("Restore active cheats before deleting."); return; }
+        JSONArray old = gameFile.optJSONArray("cheats");
+        if (old == null || index < 0 || index >= old.length()) return;
+        JSONArray next = new JSONArray();
+        for (int i = 0; i < old.length(); i++) if (i != index) next.put(old.opt(i));
+        try {
+            gameFile.put("cheats", next);
+            refreshCheatList();
+            log("Deleted cheat at position " + (index + 1) + ".");
+        } catch (JSONException e) { toast(e.getMessage()); }
     }
 
     private void toggleCheat(int index, JSONObject cheat) {
