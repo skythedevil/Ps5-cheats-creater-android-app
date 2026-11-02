@@ -737,7 +737,11 @@ public class MainActivity extends Activity {
         if(!connected){toast("Connect to the PS5 first.");return;}
         if(generatedAssembly.length==0){toast("Assemble code first.");return;}
         runAsync("Writing assembled code with read-back verification",()->{
-            int p=currentPid();byte[] before=client.read(p,generatedAssemblyAddress,generatedAssembly.length);
+            int p=currentPid();boolean executableCave=false;
+            for(MapEntry m:client.maps(p))if((m.prot&4)!=0&&Long.compareUnsigned(generatedAssemblyAddress,m.start)>=0&&Long.compareUnsigned(generatedAssemblyAddress+generatedAssembly.length,m.end)<=0){executableCave=true;break;}
+            if(!executableCave)throw new IOException("Assembly destination must fit entirely inside an executable memory region.");
+            byte[] before=client.read(p,generatedAssemblyAddress,generatedAssembly.length);
+            for(byte v:before){int x=v&255;if(x!=0x00&&x!=0x90&&x!=0xCC)throw new IOException("Assembly destination contains non-padding bytes; refusing to overwrite existing code.");}
             client.write(p,generatedAssemblyAddress,generatedAssembly);
             byte[] after=client.read(p,generatedAssemblyAddress,generatedAssembly.length);
             if(!Arrays.equals(after,generatedAssembly)){
@@ -768,9 +772,15 @@ public class MainActivity extends Activity {
         catch(Exception e){toast("Invalid executable cave address: "+e.getMessage());return;}
         runAsync("Installing hook with verification",()->{
             int p=currentPid();
-            MapEntry caveRegion=null;
-            for(MapEntry m:client.maps(p))if((m.prot&4)!=0&&Long.compareUnsigned(cave,m.start)>=0&&Long.compareUnsigned(cave+generatedHookTrampoline.length,m.end)<=0){caveRegion=m;break;}
+            long detour=parseAddress(hookDetour.getText().toString().trim());
+            MapEntry caveRegion=null;boolean detourExecutable=false;
+            for(MapEntry m:client.maps(p)){
+                if((m.prot&4)!=0&&Long.compareUnsigned(cave,m.start)>=0&&Long.compareUnsigned(cave+generatedHookTrampoline.length,m.end)<=0)caveRegion=m;
+                if((m.prot&4)!=0&&Long.compareUnsigned(detour,m.start)>=0&&Long.compareUnsigned(detour,m.end)<0)detourExecutable=true;
+            }
             if(caveRegion==null)throw new IOException("Trampoline address is not fully inside one executable memory region.");
+            if(!detourExecutable)throw new IOException("Detour address is not inside an executable memory region.");
+            if(Long.compareUnsigned(detour,cave)>=0&&Long.compareUnsigned(detour,cave+generatedHookTrampoline.length)<0)throw new IOException("Detour code and trampoline cannot overlap.");
             byte[] caveBefore=client.read(p,cave,generatedHookTrampoline.length);
             for(byte v:caveBefore){int x=v&255;if(x!=0x00&&x!=0x90&&x!=0xCC)throw new IOException("Selected executable cave contains non-padding bytes; refusing to overwrite it.");}
             try{
