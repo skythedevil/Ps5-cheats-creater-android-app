@@ -3104,10 +3104,22 @@ public class MainActivity extends Activity {
                 }
                 continue;
             }
-            if(!"patch".equals(op)&&!"write".equals(op)&&!"check".equals(op))
-                throw new IllegalArgumentException("V1 mobile supports patch/write/check steps and repeat groups containing those steps only. Unsupported step: "+op);
+            if(!"patch".equals(op)&&!"write".equals(op)&&!"check".equals(op)&&!"nop".equals(op)&&!"code".equals(op))
+                throw new IllegalArgumentException("Supported steps: patch, write, check, nop, code and repeat. Unsupported step: "+op);
             long address=resolveAddress(step.getString("addr"),processId);
-            byte[] patch=encodeCheatValue(step.optString("type","hex"),step.optString("value",""),step.optBoolean("nul",false));
+            byte[] patch;
+            if("nop".equals(op)){
+                int length=step.optInt("length",step.optInt("size",0));
+                if(length<1||length>4096)throw new IllegalArgumentException("NOP step length must be 1–4096 bytes.");
+                patch=new byte[length];Arrays.fill(patch,(byte)0x90);
+            }else if("code".equals(op)){
+                String source=step.optString("code",step.optString("value",""));
+                if(source.trim().isEmpty())throw new IllegalArgumentException("Code step needs assembly source in 'code' or 'value'.");
+                patch=assembleMini(source,address);
+                if(patch.length==0||patch.length>4096)throw new IllegalArgumentException("Assembled code must be 1–4096 bytes.");
+            }else{
+                patch=encodeCheatValue(step.optString("type","hex"),step.optString("value",""),step.optBoolean("nul",false));
+            }
             if(patch.length==0)throw new IllegalArgumentException("Empty "+op+" step.");
             byte[] original=client.read(processId,address,patch.length);
             if("check".equals(op)){
@@ -3128,10 +3140,22 @@ public class MainActivity extends Activity {
             JSONObject step=off.optJSONObject(i);
             if(step==null)throw new IllegalArgumentException("Off step "+(i+1)+" is not an object.");
             String op=step.optString("op","").toLowerCase(Locale.US);
-            if(!"patch".equals(op)&&!"write".equals(op)&&!"check".equals(op))
-                throw new IllegalArgumentException("Off list supports patch/write/check steps only; unsupported step: "+op);
+            if(!"patch".equals(op)&&!"write".equals(op)&&!"check".equals(op)&&!"nop".equals(op)&&!"code".equals(op))
+                throw new IllegalArgumentException("Off list supports patch/write/check/nop/code steps only; unsupported step: "+op);
             long address=resolveAddress(step.getString("addr"),processId);
-            byte[] value=encodeCheatValue(step.optString("type","hex"),step.optString("value",""),step.optBoolean("nul",false));
+            byte[] value;
+            if("nop".equals(op)){
+                int length=step.optInt("length",step.optInt("size",0));
+                if(length<1||length>4096)throw new IllegalArgumentException("Off NOP step length must be 1–4096 bytes.");
+                value=new byte[length];Arrays.fill(value,(byte)0x90);
+            }else if("code".equals(op)){
+                String source=step.optString("code",step.optString("value",""));
+                if(source.trim().isEmpty())throw new IllegalArgumentException("Off code step needs assembly source.");
+                value=assembleMini(source,address);
+                if(value.length==0||value.length>4096)throw new IllegalArgumentException("Off assembled code must be 1–4096 bytes.");
+            }else{
+                value=encodeCheatValue(step.optString("type","hex"),step.optString("value",""),step.optBoolean("nul",false));
+            }
             if(value.length==0)throw new IllegalArgumentException("Off "+op+" step "+(i+1)+" has an empty value.");
             byte[] before=client.read(processId,address,value.length);
             if("check".equals(op)){
