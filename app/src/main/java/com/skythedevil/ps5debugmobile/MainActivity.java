@@ -2029,8 +2029,18 @@ public class MainActivity extends Activity {
             LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(-1, -2);
             rowLp.topMargin = dp(5);
             cheatList.addView(row, rowLp);
+            LinearLayout heading = new LinearLayout(this);
+            heading.setOrientation(LinearLayout.HORIZONTAL);
+            heading.setGravity(Gravity.CENTER_VERTICAL);
             TextView name = text(c.optString("name", "Unnamed cheat"), 14, TEXT, true);
-            row.addView(name);
+            heading.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
+            CheckBox available = new CheckBox(this);
+            available.setText("Enabled");
+            available.setTextColor(TEXT);
+            available.setTextSize(12);
+            available.setChecked(c.optBoolean("enabled", true));
+            heading.addView(available);
+            row.addView(heading);
             TextView detail = text(c.optString("mode", "toggle").toUpperCase(Locale.US) + "  •  " +
                     (c.optJSONArray("steps") == null ? 0 : c.optJSONArray("steps").length()) + " step(s)", 11, MUTED, false);
             row.addView(detail);
@@ -2039,6 +2049,27 @@ public class MainActivity extends Activity {
             LinearLayout orderActions = new LinearLayout(this);
             orderActions.setOrientation(LinearLayout.HORIZONTAL);
             Button apply = button(enabledCheats.containsKey(idx) ? "RESTORE" : "APPLY", ACCENT);
+            apply.setEnabled(enabledCheats.containsKey(idx) || c.optBoolean("enabled", true));
+            available.setEnabled(!enabledCheats.containsKey(idx));
+            available.setOnCheckedChangeListener((view, checked) -> {
+                if (enabledCheats.containsKey(idx)) {
+                    available.setOnCheckedChangeListener(null);
+                    available.setChecked(true);
+                    available.setOnCheckedChangeListener((v2, value) -> {
+                        if (enabledCheats.containsKey(idx)) { v2.setChecked(true); return; }
+                        try { c.put("enabled", value); persistGameFile(); apply.setEnabled(value); log((value ? "Enabled " : "Disabled ") + c.optString("name") + " in the cheat library."); }
+                        catch (JSONException e) { toast("Could not save enabled state: " + e.getMessage()); }
+                    });
+                    toast("Restore this active cheat before changing its enabled state.");
+                    return;
+                }
+                try {
+                    c.put("enabled", checked);
+                    persistGameFile();
+                    apply.setEnabled(checked);
+                    log((checked ? "Enabled " : "Disabled ") + c.optString("name") + " in the cheat library.");
+                } catch (JSONException e) { toast("Could not save enabled state: " + e.getMessage()); }
+            });
             Button edit = button("EDIT", PANEL);
             Button duplicate = button("DUPLICATE", PANEL);
             Button up = button("MOVE UP", PANEL);
@@ -2052,7 +2083,13 @@ public class MainActivity extends Activity {
             orderActions.addView(down, new LinearLayout.LayoutParams(0, dp(40), 1));
             row.addView(primaryActions);
             row.addView(orderActions);
-            apply.setOnClickListener(v -> toggleCheat(idx, c));
+            apply.setOnClickListener(v -> {
+                if (!enabledCheats.containsKey(idx) && !c.optBoolean("enabled", true)) {
+                    toast("This cheat is disabled in the library. Enable it first.");
+                    return;
+                }
+                toggleCheat(idx, c);
+            });
             edit.setOnClickListener(v -> editCheat(idx, c));
             up.setEnabled(idx > 0 && enabledCheats.isEmpty());
             down.setEnabled(idx < count - 1 && enabledCheats.isEmpty());
