@@ -76,10 +76,10 @@ public class MainActivity extends Activity {
     private final ExecutorService debugEventWorker=Executors.newSingleThreadExecutor();
     private EditText asmAddress,asmSource,hookTarget,hookDetour,hookOriginal,hookLength,hookCaveAddress;
     private TextView asmResult,hookResult;
-    private byte[] generatedHookPatch=new byte[0],generatedHookTrampoline=new byte[0],generatedHookOriginal=new byte[0];
+    private byte[] generatedHookPatch=new byte[0],generatedHookTrampoline=new byte[0],generatedHookOriginal=new byte[0],generatedHookCaveOriginal=new byte[0];
     private byte[] generatedAssembly=new byte[0],generatedAssemblyOriginal=new byte[0];
     private long generatedAssemblyAddress=0;
-    private long generatedHookSite=0;
+    private long generatedHookSite=0,generatedHookCave=0;
     private EditText caveMinSize,caveMaxMiB;
     private TextView caveResult;
     private Spinner processSpinner;
@@ -768,9 +768,15 @@ public class MainActivity extends Activity {
         catch(Exception e){toast("Invalid executable cave address: "+e.getMessage());return;}
         runAsync("Installing hook with verification",()->{
             int p=currentPid();
+            MapEntry caveRegion=null;
+            for(MapEntry m:client.maps(p))if((m.prot&4)!=0&&Long.compareUnsigned(cave,m.start)>=0&&Long.compareUnsigned(cave+generatedHookTrampoline.length,m.end)<=0){caveRegion=m;break;}
+            if(caveRegion==null)throw new IOException("Trampoline address is not fully inside one executable memory region.");
+            byte[] caveBefore=client.read(p,cave,generatedHookTrampoline.length);
+            for(byte v:caveBefore){int x=v&255;if(x!=0x00&&x!=0x90&&x!=0xCC)throw new IOException("Selected executable cave contains non-padding bytes; refusing to overwrite it.");}
             client.write(p,cave,generatedHookTrampoline);
             byte[] caveCheck=client.read(p,cave,generatedHookTrampoline.length);
             if(!Arrays.equals(caveCheck,generatedHookTrampoline))throw new IOException("Trampoline read-back mismatch; hook site was not modified.");
+            generatedHookCaveOriginal=caveBefore;generatedHookCave=cave;
             try{
                 client.write(p,generatedHookSite,generatedHookPatch);
                 byte[] patchCheck=client.read(p,generatedHookSite,generatedHookPatch.length);
@@ -794,8 +800,14 @@ public class MainActivity extends Activity {
         runAsync("Restoring original hook bytes",()->{
             int p=currentPid();client.write(p,generatedHookSite,generatedHookOriginal);
             byte[] check=client.read(p,generatedHookSite,generatedHookOriginal.length);
-            if(!Arrays.equals(check,generatedHookOriginal))throw new IOException("Restore read-back mismatch.");
-            return "Original hook-site bytes restored and verified. Trampoline cave was left untouched.";
+            if(!Arrays.equals(check,generatedHookOriginal))throw new IOException("Hook-site restore read-back mismatch.");
+            if(generatedHookCaveOriginal.length>0){
+                client.write(p,generatedHookCave,generatedHookCaveOriginal);
+                byte[] caveCheck=client.read(p,generatedHookCave,generatedHookCaveOriginal.length);
+                if(!Arrays.equals(caveCheck,generatedHookCaveOriginal))throw new IOException("Hook was removed, but trampoline cave restore verification failed.");
+                generatedHookCaveOriginal=new byte[0];generatedHookCave=0;
+            }
+            return "Original hook-site bytes restored and verified; trampoline cave padding restored too.";
         },hookResult::setText);
     }
 
