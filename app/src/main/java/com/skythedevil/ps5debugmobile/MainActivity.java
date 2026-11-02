@@ -614,6 +614,39 @@ public class MainActivity extends Activity {
         page.addView(kernelLogView,new LinearLayout.LayoutParams(-1,dp(190)));
         kernelLogButton.setOnClickListener(v->{if(kernelLogRunning)stopKernelLog();else startKernelLog();});
 
+        section(page, "08A  AI CHEAT CREATOR", "Connect an AI provider once, then work through cheat discovery conversationally. The assistant can plan scans and interpret user-reported values; live screen capture and autonomous scan control are separate integrations.");
+        aiStatusView=text(AiAssistant.isConfigured(this)?"AI CONFIGURED  •  API key stored encrypted on this device.":"AI NOT CONFIGURED  •  Save a provider endpoint, model and API key.",11,MUTED,true);
+        page.addView(aiStatusView);
+        aiEndpointInput=field("OpenAI-compatible API base URL",AiAssistant.endpoint(this));page.addView(aiEndpointInput);
+        aiModelInput=field("Model name",AiAssistant.model(this));page.addView(aiModelInput);
+        aiKeyInput=field("API key (blank keeps the saved key)","");
+        aiKeyInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        page.addView(aiKeyInput);
+        LinearLayout aiSettingsRow=new LinearLayout(this);aiSettingsRow.setOrientation(LinearLayout.HORIZONTAL);
+        aiSaveButton=button("SAVE SETTINGS + TEST",ACCENT);
+        Button aiClear=button("DISCONNECT AI",PANEL);
+        aiSettingsRow.addView(aiSaveButton,new LinearLayout.LayoutParams(0,dp(48),1));
+        aiSettingsRow.addView(aiClear,new LinearLayout.LayoutParams(0,dp(48),1));page.addView(aiSettingsRow);
+        aiChatView=text("AI conversation will appear here. Configure a provider to begin.",12,TEXT,false);
+        aiChatView.setTypeface(Typeface.MONOSPACE);aiChatView.setTextIsSelectable(true);
+        aiChatView.setPadding(dp(10),dp(10),dp(10),dp(10));aiChatView.setBackgroundColor(PANEL);
+        page.addView(aiChatView,new LinearLayout.LayoutParams(-1,dp(260)));
+        aiPromptInput=field("Tell AI which cheat you want to create…","");
+        aiPromptInput.setSingleLine(false);aiPromptInput.setMinLines(2);aiPromptInput.setGravity(Gravity.TOP|Gravity.START);
+        page.addView(aiPromptInput,new LinearLayout.LayoutParams(-1,dp(84)));
+        aiSendButton=button("SEND TO AI ASSISTANT",ACCENT);page.addView(aiSendButton);
+        Button aiReset=button("CLEAR CONVERSATION",PANEL);page.addView(aiReset);
+        loadAiConversation();
+        aiSaveButton.setOnClickListener(v->saveAiSettingsAndTest());
+        aiClear.setOnClickListener(v->new android.app.AlertDialog.Builder(this)
+            .setTitle("Disconnect AI?").setMessage("This removes the saved API key and provider settings from this device.")
+            .setNegativeButton("CANCEL",null).setPositiveButton("DISCONNECT",(d,w)->{
+                AiAssistant.clearConfig(this);aiStatusView.setText("AI NOT CONFIGURED");aiKeyInput.setText("");
+                aiEndpointInput.setText(AiAssistant.defaultEndpoint());aiModelInput.setText(AiAssistant.defaultModel());
+            }).show());
+        aiSendButton.setOnClickListener(v->sendAiMessage());
+        aiReset.setOnClickListener(v->{aiMessages=new JSONArray();saveAiConversation();renderAiConversation();});
+
         section(page, "09  ACTIVITY LOG", "Recent connection and operation results.");
         logView = text("Ready.", 11, MUTED, false);
         logView.setTypeface(Typeface.MONOSPACE);
@@ -621,6 +654,95 @@ public class MainActivity extends Activity {
     }
 
     private TextView logView;
+    private EditText aiEndpointInput, aiModelInput, aiKeyInput, aiPromptInput;
+    private TextView aiChatView, aiStatusView;
+    private Button aiSaveButton, aiSendButton;
+    private final ExecutorService aiWorker = Executors.newSingleThreadExecutor();
+    private JSONArray aiMessages = new JSONArray();
+
+    private static final String AI_SYSTEM_PROMPT =
+        "You are the PS5 Debug Studio in-app game memory research assistant. Help the user design cheats through a careful, interactive experiment. " +
+        "Never invent addresses, scan results, game values, screen observations, or successful tests. You cannot directly see the PS5 screen or control the console unless the app explicitly supplies such data. " +
+        "Ask the user to report the exact visible value after each gameplay action, then explain which TurboScan comparison and value type to use. " +
+        "Prefer small, reversible experiments. Explain how to refine candidates using changed/unchanged/increased/decreased scans. " +
+        "Do not recommend memory writes, freezes, hooks, or remote function calls until a candidate is supported by repeated observations; always ask the user to confirm before any write or activation. " +
+        "When uncertain, say so and request the next observation. Respond in the user's language, preferably concise Hinglish.";
+
+    private void loadAiConversation(){
+        try{
+            String raw=getSharedPreferences("ai_assistant_chat",0).getString("messages","[]");
+            aiMessages=new JSONArray(raw);
+        }catch(Exception e){aiMessages=new JSONArray();}
+        renderAiConversation();
+    }
+    private void saveAiConversation(){
+        getSharedPreferences("ai_assistant_chat",0).edit().putString("messages",aiMessages.toString()).apply();
+    }
+    private void renderAiConversation(){
+        if(aiChatView==null)return;
+        StringBuilder out=new StringBuilder();
+        for(int i=0;i<aiMessages.length();i++){
+            JSONObject m=aiMessages.optJSONObject(i);if(m==null||"system".equals(m.optString("role")))continue;
+            out.append("\n").append("user".equals(m.optString("role"))?"YOU":"AI").append(":\n")
+                .append(m.optString("content")).append("\n");
+        }
+        if(out.length()==0)out.append("AI conversation will appear here. Configure a provider to begin.");
+        aiChatView.setText(out.toString());
+    }
+    private void saveAiSettingsAndTest(){
+        try{
+            String key=aiKeyInput.getText().toString().trim();
+            if(!AiAssistant.isConfigured(this)&&key.isEmpty())throw new IllegalArgumentException("Enter an API key to configure AI.");
+            AiAssistant.saveConfig(this,aiEndpointInput.getText().toString(),aiModelInput.getText().toString(),key);
+            aiKeyInput.setText("");
+            aiStatusView.setText("SETTINGS SAVED  •  API key encrypted with Android Keystore. Testing connection…");
+            aiWorker.execute(()->{
+                try{
+                    JSONArray test=new JSONArray().put(new JSONObject().put("role","system").put("content","Reply with a short connection confirmation."));
+                    test.put(new JSONObject().put("role","user").put("content","Connection test. Reply: PS5 Debug Studio AI connected."));
+                    String answer=AiAssistant.chat(this,test);
+                    main.post(()->{aiStatusView.setText("CONNECTED  •  "+AiAssistant.model(this)+"  •  key saved securely on this device.");toast("AI connection successful.");});
+                }catch(Exception e){main.post(()->{aiStatusView.setText("SAVED, BUT CONNECTION TEST FAILED: "+e.getMessage());toast("AI test failed: "+e.getMessage());});}
+            });
+        }catch(Exception e){toast("Cannot save AI settings: "+e.getMessage());}
+    }
+    private String aiRuntimeContext(){
+        StringBuilder c=new StringBuilder("App context: PS5 connected=").append(connected);
+        if(connected)c.append(", selected PID=").append(selectedPid);
+        c.append(". TurboScan controls available in the app: first scan, next scan, exact/bigger/smaller/between/increased/decreased/changed/unchanged comparisons, result paging and individual result editing. ");
+        c.append("Screen capture is not currently connected to this assistant; only use values the user explicitly reports.");
+        return c.toString();
+    }
+    private void sendAiMessage(){
+        String prompt=aiPromptInput.getText().toString().trim();
+        if(prompt.isEmpty())return;
+        if(!AiAssistant.isConfigured(this)){toast("Configure AI in this section first.");return;}
+        if(aiMessages.length()==0)aiMessages.put(new JSONObject().put("role","system").put("content",AI_SYSTEM_PROMPT));
+        try{
+            JSONObject user=new JSONObject();user.put("role","user");user.put("content",prompt+"\n\n[Current app context: "+aiRuntimeContext()+"]");
+            aiMessages.put(user);saveAiConversation();renderAiConversation();aiPromptInput.setText("");
+            aiSendButton.setEnabled(false);aiStatusView.setText("AI THINKING…");
+            JSONArray request=new JSONArray();
+            for(int i=0;i<aiMessages.length();i++)request.put(aiMessages.getJSONObject(i));
+            aiWorker.execute(()->{
+                try{
+                    String answer=AiAssistant.chat(this,request);
+                    main.post(()->{
+                        aiMessages.put(new JSONObject().put("role","assistant").put("content",answer));
+                        while(aiMessages.length()>41)aiMessages.remove(1);
+                        saveAiConversation();renderAiConversation();aiSendButton.setEnabled(true);
+                        aiStatusView.setText("CONNECTED  •  conversation saved locally.");
+                    });
+                }catch(Exception e){
+                    main.post(()->{
+                        aiMessages.put(new JSONObject().put("role","assistant").put("content","AI request failed: "+e.getMessage()));
+                        saveAiConversation();renderAiConversation();aiSendButton.setEnabled(true);
+                        aiStatusView.setText("AI REQUEST FAILED  •  check endpoint, model, key and network.");
+                    });
+                }
+            });
+        }catch(Exception e){toast("Cannot send AI message: "+e.getMessage());aiSendButton.setEnabled(true);}
+    }
 
     private void startKernelLog() {
         final String ip=host.getText().toString().trim();
