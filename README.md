@@ -19,7 +19,7 @@ This repository is an in-progress Android port. Several major desktop workflows 
 - Debug attach/detach, TCP 755 event listener, software breakpoints, configurable 1/2/4/8-byte hardware write/read-write watchpoints, thread listing, process/thread stepping, pause/resume, GP register editing, and XMM0 editing through the full 832-byte FPU/YMM state image.
 - Remote buffer allocation/free, verified buffer writes, and six-argument remote calls through cached stack-safe x64 trampolines; explicit disconnect attempts to free session-owned buffers and trampoline pools.
 - TCP 3232 kernel-log stream viewer.
-- Cheat JSON library editing/persistence, repeat patch groups, conditional `check` steps, NOP patches, assembled-code steps in activation and deactivation sequences, verified turn-all-off restoration, and partial GoldHEN JSON, SHN XML and MC4 conversion.
+- Cheat JSON library editing/persistence, repeat patch groups, conditional `check` steps, bounded `read` reports, NOP patches, assembled-code steps in activation and deactivation sequences, verified turn-all-off restoration, and partial GoldHEN JSON, SHN XML and MC4 conversion.
 
 See [FEATURE_STATUS.md](FEATURE_STATUS.md) for exact implemented/partial/pending distinctions and [PARITY_CHECKLIST.md](PARITY_CHECKLIST.md) for the release gate.
 
