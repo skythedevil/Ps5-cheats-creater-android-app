@@ -111,6 +111,7 @@ public class MainActivity extends Activity {
         getWindow().setNavigationBarColor(BG);
         getWindow().getDecorView().setSystemUiVisibility(0);
         buildUi();
+        restoreStoredGameFile();
         log("Mobile companion v1.0 ready. PS5 and phone must be on the same reachable network.");
     }
 
@@ -1973,6 +1974,7 @@ public class MainActivity extends Activity {
 
     private void refreshCheatList() {
         cheatList.removeAllViews();
+        persistGameFile();
         if (gameFile == null) { cheatStatus.setText("No game file loaded."); return; }
         JSONArray array = gameFile.optJSONArray("cheats");
         int count = array == null ? 0 : array.length();
@@ -1999,12 +2001,14 @@ public class MainActivity extends Activity {
             orderActions.setOrientation(LinearLayout.HORIZONTAL);
             Button apply = button(enabledCheats.containsKey(idx) ? "RESTORE" : "APPLY", ACCENT);
             Button edit = button("EDIT", PANEL);
+            Button duplicate = button("DUPLICATE", PANEL);
             Button up = button("MOVE UP", PANEL);
             Button down = button("MOVE DOWN", PANEL);
             Button remove = button("DELETE", PANEL);
             primaryActions.addView(apply, new LinearLayout.LayoutParams(0, dp(44), 2));
             primaryActions.addView(edit, new LinearLayout.LayoutParams(0, dp(44), 1));
             primaryActions.addView(remove, new LinearLayout.LayoutParams(0, dp(44), 1));
+            orderActions.addView(duplicate, new LinearLayout.LayoutParams(0, dp(40), 1));
             orderActions.addView(up, new LinearLayout.LayoutParams(0, dp(40), 1));
             orderActions.addView(down, new LinearLayout.LayoutParams(0, dp(40), 1));
             row.addView(primaryActions);
@@ -2015,9 +2019,56 @@ public class MainActivity extends Activity {
             down.setEnabled(idx < count - 1 && enabledCheats.isEmpty());
             remove.setEnabled(enabledCheats.isEmpty());
             edit.setEnabled(enabledCheats.isEmpty());
+            duplicate.setEnabled(enabledCheats.isEmpty());
+            duplicate.setOnClickListener(v -> duplicateCheat(idx));
             up.setOnClickListener(v -> moveCheat(idx, -1));
             down.setOnClickListener(v -> moveCheat(idx, 1));
             remove.setOnClickListener(v -> deleteCheat(idx));
+        }
+    }
+
+    private void persistGameFile() {
+        if (gameFile == null) return;
+        getPreferences(MODE_PRIVATE).edit()
+                .putString("saved_game_file", gameFile.toString())
+                .apply();
+    }
+
+    private void restoreStoredGameFile() {
+        String saved = getPreferences(MODE_PRIVATE).getString("saved_game_file", "");
+        if (saved == null || saved.trim().isEmpty()) return;
+        try {
+            JSONObject restored = new JSONObject(saved);
+            if (!"ps5cheat/1".equals(restored.optString("format")) ||
+                    restored.optJSONArray("cheats") == null) return;
+            gameFile = restored;
+            gameName.setText(gameFile.optString("game", ""));
+            titleId.setText(gameFile.optString("title_id", ""));
+            gameVersion.setText(gameFile.optString("version", ""));
+            refreshCheatList();
+            log("Restored saved game/cheat library from this device.");
+        } catch (Exception e) {
+            log("Saved cheat library could not be restored: " + e.getMessage());
+        }
+    }
+
+    private void duplicateCheat(int index) {
+        if (gameFile == null || !enabledCheats.isEmpty()) {
+            toast("Restore active cheats before duplicating.");
+            return;
+        }
+        JSONArray cheats = gameFile.optJSONArray("cheats");
+        if (cheats == null || index < 0 || index >= cheats.length()) return;
+        try {
+            JSONObject source = cheats.getJSONObject(index);
+            JSONObject copy = new JSONObject(source.toString());
+            String originalName = source.optString("name", "Cheat");
+            copy.put("name", originalName + " Copy");
+            cheats.put(index + 1, copy);
+            refreshCheatList();
+            log("Duplicated cheat: " + originalName);
+        } catch (Exception e) {
+            toast("Could not duplicate cheat: " + e.getMessage());
         }
     }
 
