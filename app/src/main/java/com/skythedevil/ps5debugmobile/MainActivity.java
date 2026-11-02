@@ -1826,7 +1826,14 @@ public class MainActivity extends Activity {
                     gameName.setText(gameFile.optString("game"));titleId.setText(gameFile.optString("title_id"));gameVersion.setText(gameFile.optString("version"));
                     refreshCheatList();log("Decrypted and imported "+gameFile.getJSONArray("cheats").length()+" MC4 cheat(s).");
                 }
-            } else if (requestCode == REQ_EXPORT_MC4) {\n                String mc4=encryptMc4(buildShnXml());\n                try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IOException("Could not open destination.");out.write(mc4.getBytes(StandardCharsets.US_ASCII));}\n                log("Exported encrypted MC4 trainer.");\n            } else if (requestCode == REQ_EXPORT_SHN) {
+            } else if (requestCode == REQ_EXPORT_MC4) {
+                String mc4=encryptMc4(buildShnXml());
+                try(OutputStream out=getContentResolver().openOutputStream(uri)){
+                    if(out==null)throw new IOException("Could not open destination.");
+                    out.write(mc4.getBytes(StandardCharsets.US_ASCII));
+                }
+                log("Exported encrypted MC4 trainer.");
+            } else if (requestCode == REQ_EXPORT_SHN) {
                 String shn=buildShnXml();
                 try(OutputStream out=getContentResolver().openOutputStream(uri)){
                     if(out==null)throw new IOException("Could not open destination.");
