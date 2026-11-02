@@ -1883,12 +1883,17 @@ public class MainActivity extends Activity {
                     String bytes=toHex(parseHex(item.optString("bytes","")));
                     int type=item.optInt("type",0);
                     if(address.isEmpty()||bytes.isEmpty()||type<0||type>10)throw new IllegalArgumentException("Invalid address entry "+(n+1)+".");
-                    if(parseHex(bytes).length>4096)throw new IllegalArgumentException("Entry "+(n+1)+" exceeds 4096 bytes.");
-                    loaded.add(new AddressEntry(item.optString("name","Entry "+(n+1)),address,bytes,type,item.optBoolean("frozen",false)));
+                    int byteLength=parseHex(bytes).length;
+                    if(byteLength>4096)throw new IllegalArgumentException("Entry "+(n+1)+" exceeds 4096 bytes.");
+                    int expectedLength=type==1||type==2?1:type==3||type==4?2:type==5||type==6||type==9?4:type==7||type==8||type==10?8:byteLength;
+                    if(byteLength!=expectedLength)throw new IllegalArgumentException("Entry "+(n+1)+" has an invalid byte length for "+addressTypeName(type)+".");
+                    // Never activate imported freeze entries automatically: imported addresses
+                    // may belong to another process/session. User can freeze them explicitly.
+                    loaded.add(new AddressEntry(item.optString("name","Entry "+(n+1)),address,bytes,type,false));
                 }
                 addressEntries.clear();addressEntries.addAll(loaded);saveAddressEntries();renderAddressEntries();
                 addressHandler.removeCallbacks(addressFreezeTick);if(hasFrozenAddresses()&&connected)addressHandler.post(addressFreezeTick);
-                log("Loaded "+loaded.size()+" address entries from file.");
+                log("Loaded "+loaded.size()+" address entries from file. Freeze flags were reset for safety; freeze entries manually after checking the process.");
             } else if (requestCode == REQ_EXPORT_ADDRESS_TABLE) {
                 JSONObject table=new JSONObject();table.put("format","ps5-address-table/1");
                 JSONArray entries=new JSONArray();
