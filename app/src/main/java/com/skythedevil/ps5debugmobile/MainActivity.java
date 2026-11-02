@@ -2938,42 +2938,32 @@ public class MainActivity extends Activity {
     private void validatePatchTree(JSONArray steps,int depth)throws Exception{
         if(depth>8)throw new IllegalArgumentException("Repeat nesting cannot exceed 8 levels.");
         for(int i=0;i<steps.length();i++){
-            JSONObject step=steps.optJSONObject(i);if(step==null)throw new IllegalArgumentException("Nested step "+(i+1)+" must be an object.");
+            JSONObject step=steps.optJSONObject(i);
+            if(step==null)throw new IllegalArgumentException("Nested step "+(i+1)+" must be an object.");
             String op=step.optString("op","").toLowerCase(Locale.US);
-            if("log".equals(op)){
-                String message=step.optString("text",step.optString("message",""));
-                stepOutput.add("LOG: "+message);
-                continue;
-            }
-            if("sleep".equals(op)){
-                int delay=step.optInt("ms",100);
-                if(delay<0||delay>60000)throw new IllegalArgumentException("Sleep step must be 0–60000 ms.");
-                if(delay>0)Thread.sleep(delay);
-                stepOutput.add("WAIT: "+delay+" ms");
-                continue;
-            }
-            if("call".equals(op)){
-                long target=resolveAddress(step.getString("rip"),processId);boolean executable=false;
-                for(MapEntry map:client.maps(processId))if((map.prot&4)!=0&&Long.compareUnsigned(target,map.start)>=0&&Long.compareUnsigned(target,map.end)<0){executable=true;break;}
-                if(!executable)throw new IOException("Call target is not inside an executable memory map.");
-                JSONArray args=step.optJSONArray("args");if(args!=null&&args.length()>6)throw new IllegalArgumentException("Call step supports at most six integer arguments.");
-                long[] values=new long[6];
-                if(args!=null)for(int n=0;n<args.length();n++){
-                    Object raw=args.get(n);String value=String.valueOf(raw).trim();
-                    values[n]=value.matches("(?i)0x[0-9a-f]+")?Long.parseUnsignedLong(value.substring(2),16):Long.parseLong(value);
-                }
-                long result=client.callSafe(processId,target,values);
-                stepOutput.add("CALL 0x"+Long.toHexString(target).toUpperCase(Locale.US)+" -> RAX 0x"+Long.toHexString(result).toUpperCase(Locale.US)+" (not retried)");
-                continue;
-            }
             if("repeat".equals(op)){
                 int count=step.optInt("count",1),delay=step.optInt("delay_ms",0);JSONArray children=step.optJSONArray("steps");
-                if(count<1||count>1000||delay<0||delay>60000||children==null||children.length()==0)throw new IllegalArgumentException("Nested repeat "+(i+1)+" has invalid count, delay or children.");
+                if(count<1||count>1000||delay<0||delay>60000||children==null||children.length()==0)
+                    throw new IllegalArgumentException("Nested repeat "+(i+1)+" has invalid count, delay or children.");
                 validatePatchTree(children,depth+1);
-            }else if("patch".equals(op)){
-                if(step.optString("addr","").trim().isEmpty())throw new IllegalArgumentException("Nested patch "+(i+1)+" needs an address.");
-                if(encodeCheatValue(step.optString("type","hex"),step.optString("value",""),step.optBoolean("nul",false)).length==0)throw new IllegalArgumentException("Nested patch "+(i+1)+" has an invalid value.");
-            }else throw new IllegalArgumentException("Only patch and repeat operations can execute in this build (found "+op+").");
+            }else if("patch".equals(op)||"write".equals(op)||"check".equals(op)){
+                if(step.optString("addr","").trim().isEmpty())throw new IllegalArgumentException("Nested "+op+" "+(i+1)+" needs an address.");
+                if(encodeCheatValue(step.optString("type","hex"),step.optString("value",""),step.optBoolean("nul",false)).length==0)
+                    throw new IllegalArgumentException("Nested "+op+" "+(i+1)+" has an invalid value.");
+            }else if("nop".equals(op)){
+                int length=step.optInt("length",step.optInt("size",0));
+                if(length<1||length>4096)throw new IllegalArgumentException("Nested NOP length must be 1–4096.");
+            }else if("code".equals(op)){
+                if(step.optString("addr","").trim().isEmpty()||step.optString("code",step.optString("value","")).trim().isEmpty())
+                    throw new IllegalArgumentException("Nested code step needs address and assembly source.");
+            }else if("read".equals(op)){
+                if(step.optString("addr","").trim().isEmpty())throw new IllegalArgumentException("Nested read step needs an address.");
+            }else if("call".equals(op)){
+                if(step.optString("rip","").trim().isEmpty())throw new IllegalArgumentException("Nested call step needs rip.");
+                JSONArray args=step.optJSONArray("args");if(args!=null&&args.length()>6)throw new IllegalArgumentException("Call supports at most six arguments.");
+            }else if(!"log".equals(op)&&!"sleep".equals(op)){
+                throw new IllegalArgumentException("Unsupported nested operation: "+op);
+            }
         }
     }
 
@@ -3121,6 +3111,31 @@ public class MainActivity extends Activity {
             JSONObject step=steps.optJSONObject(i);
             if(step==null)throw new IllegalArgumentException("Step "+(i+1)+" is not a JSON object.");
             String op=step.optString("op","").toLowerCase(Locale.US);
+            if("log".equals(op)){
+                stepOutput.add("LOG: "+step.optString("text",step.optString("message","")));
+                continue;
+            }
+            if("sleep".equals(op)){
+                int delay=step.optInt("ms",100);
+                if(delay<0||delay>60000)throw new IllegalArgumentException("Sleep step must be 0–60000 ms.");
+                if(delay>0)Thread.sleep(delay);
+                stepOutput.add("WAIT: "+delay+" ms");
+                continue;
+            }
+            if("call".equals(op)){
+                long target=resolveAddress(step.getString("rip"),processId);boolean executable=false;
+                for(MapEntry map:client.maps(processId))if((map.prot&4)!=0&&Long.compareUnsigned(target,map.start)>=0&&Long.compareUnsigned(target,map.end)<0){executable=true;break;}
+                if(!executable)throw new IOException("Call target is not inside an executable memory map.");
+                JSONArray args=step.optJSONArray("args");if(args!=null&&args.length()>6)throw new IllegalArgumentException("Call step supports at most six integer arguments.");
+                long[] values=new long[6];
+                if(args!=null)for(int n=0;n<args.length();n++){
+                    Object raw=args.get(n);String value=String.valueOf(raw).trim();
+                    values[n]=value.matches("(?i)0x[0-9a-f]+")?Long.parseUnsignedLong(value.substring(2),16):Long.parseLong(value);
+                }
+                long result=client.callSafe(processId,target,values);
+                stepOutput.add("CALL 0x"+Long.toHexString(target).toUpperCase(Locale.US)+" -> RAX 0x"+Long.toHexString(result).toUpperCase(Locale.US)+" (not retried)");
+                continue;
+            }
             if("repeat".equals(op)){
                 int count=step.optInt("count",1),delay=step.optInt("delay_ms",0);
                 JSONArray nested=step.optJSONArray("steps");
