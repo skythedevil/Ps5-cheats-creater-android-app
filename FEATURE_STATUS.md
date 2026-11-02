@@ -1,12 +1,14 @@
 # Feature implementation status
 
-Last updated: 2026-11-02. Added a bounded multi-level pointer scanner (writable non-executable memory map, module-rooted chain search, configurable offset/depth/budget and cancel control); CI validation pending. Paged hex editor, address-table write verification, freeze controls, call stack and code-cave finder are also present.
+Last updated: 2026-11-02. Batch 1 pointer scanner and hex editor work, plus Batch 2 x64 assembler, hook builder and TCP 755 debug-event listener are implemented in source and CI-built. Physical-console validation remains pending.
 
 Legend: **Implemented** = code path exists; **Partial** = limited subset only; **Pending** = not implemented; **Test pending** = code exists but CI/device validation is not complete.
 
 | Feature area | Status | What exists now | Still needed |
-| Pointer scanner | Partial (CI pending) | Bounded client-side pointer map over readable regions with module-first prioritization; 8-byte aligned candidates; configurable scan budget, maximum offset and depth; multi-level chains rooted in named modules; cancellation; candidate/result caps | Needs turbo-assisted map construction, BSS/module alias handling, map/result save-load, live-chain resolve/rescan and physical-console performance validation |
-|---|---|---|---|
+| Pointer scanner | Partial (CI built) | Bounded client-side pointer map over readable regions with module-first prioritization; 8-byte aligned candidates; configurable scan budget, offset and depth; path-specific cycle prevention; cancellation and caps | Turbo-assisted maps, save/load, live resolve/rescan, console performance validation |
+| Assembler | Partial (offline) | Built-in x86-64 subset encoder: NOP, RET, INT3, push/pop 64-bit registers, MOV r64/imm64, relative and register-indirect JMP/CALL, DB bytes; verified memory write and original-byte restore | Full x86-64 assembler, labels, expressions, memory operands, validation against Keystone/console |
+| Hook builder | Partial | 14-byte absolute JMP patch, NOP padding and trampoline return bytes; optional verified trampoline/patch write and original-byte restore; requires user-supplied original bytes and whole-instruction length | Executable allocation, instruction-boundary validation, RIP-relative relocation, register/flags preservation templates and live testing |
+| Live debugger events | Partial (CI built) | Phone TCP 755 listener accepts 1184-byte payload event packets and displays LWP, status, RIP/RBP/RSP; starts before debugger attach; listener lifecycle cleaned up on activity destroy | Validate packet timing/endianness on console, reconnect/event loop hardening, breakpoint/watchpoint/step event classification |
 | Android app shell / readable mobile layout | Implemented (not device-tested) | Native Android screen, scroll layout, dark high-contrast panels, operation log | Phone/tablet UI regression and accessibility testing |
 | TCP console connection | Partial | Connect/disconnect on port 744; protocol version handshake | Correct connection error recovery, discovery, firmware/branding/platform capability queries |
 | Process management | Partial | Process list, PID selection, process info | Foreground app details, process lifecycle actions, process authentication/capability handling |
@@ -20,7 +22,7 @@ Legend: **Implemented** = code path exists; **Partial** = limited subset only; *
 | Hex editor | Partial (not live-tested) | Bounded 1–4096 byte paging, editable hex-byte buffer, previous/next page navigation, write with read-back verification, restore-original snapshot | Typed cursor values, selection/copy formats, region dump/export and real-console validation |
 | Process disassembly | Partial | Calls payload disassembly command and displays instruction address/length/kind/bytes | Mnemonic/operand decoding, navigation, AOB, make signature, xrefs UI polish |
 | Cross references | Partial | RIP-relative xref search in executable regions (first 1 MiB per region) | Full-range configurable scan, result navigation, xref types |
-| Debug attach/detach | Partial | Attach/detach command controls | Port 755 async event listener and robust session state |
+| Debug attach/detach | Partial | Attach/detach controls plus phone TCP 755 async event listener for 1184-byte debugger event packets | Physical-console validation, robust session state and event classification |
 | Software breakpoints | Partial | Set/clear slots 0–29 | Breakpoint list, hit events, navigation, original-byte management UI |
 | Hardware watchpoints | Partial | Set/clear slot controls with 8-byte write mode | Read/read-write modes, sizes, DR register view and hit events |
 | Threads | Partial | Thread/LWP listing | Thread details, suspend/resume, selection and status |
@@ -29,7 +31,7 @@ Legend: **Implemented** = code path exists; **Partial** = limited subset only; *
 | Call stack | Partial (not live-tested) | Frame-pointer chain reader with RBP/RSP auto-fill from thread registers, depth limit and frame output | Frameless unwind, symbolication, click-to-navigate and real-console validation |
 | Remote calls / buffers | Pending | — | Safe call trampoline, six arguments, alloc/free, buffers and call UI |
 | Function logger | Pending | — | Hook generation, ring buffer, polling, caller grouping and export |
-| Code caves / hooks / assembler | Partial (not live-tested) | Read-only executable-region cave scan for 00/90/CC padding with bounded scan budget | Architecture-aware cave scoring, assembler, trampoline builder, hook/unhook and safe restore |
+| Code caves / hooks / assembler | Partial | Bounded executable-padding scan; x64 subset assembler; absolute jump hook patch/trampoline generation; verified install and restore helpers | Full assembler, RIP-relative relocation, instruction-boundary decoding, safe executable allocation and physical-console validation |
 | Cheat JSON library | Partial | Create/import/export `ps5cheat/1`; fixed hex patch steps; title-ID check; patch on/off restore | Full cheat editor, all step types, parameters, off steps, repeat, validation, groups and reorder |
 | Cheat format conversion | Pending | — | GoldHEN JSON, SHN, MC4, ShnExt, ps5pack import/export |
 | Cheat recorder / caller | Pending | — | Record memory changes/calls into cheat steps |
@@ -57,7 +59,3 @@ Legend: **Implemented** = code path exists; **Partial** = limited subset only; *
 - The exact-byte scanner is a small-range fallback. An initial TurboScan exact-value path has now been added, but it is not yet a complete replacement for the desktop scanner and has not been live-tested.
 - UDP discovery is now implemented in source but has not been verified against a physical console or different Android Wi-Fi networks.\n- No physical console validation has been claimed.
 - No APK is to be shared as a user release until the release gate in [PARITY_CHECKLIST.md](PARITY_CHECKLIST.md) is met.
-| Pointer scanner | Partial | Bounded client-side pointer map over readable regions with module-first prioritization; 8-byte aligned candidates; configurable scan budget, offset and depth; path-specific cycle prevention; cancellation and caps | Turbo-assisted maps, save/load, live resolve/rescan, console performance validation |
-| Assembler | Partial (offline) | Built-in x86-64 subset encoder: NOP, RET, INT3, push/pop 64-bit registers, MOV r64/imm64, relative and register-indirect JMP/CALL, DB bytes, verified memory write and restore snapshot | Full x86-64 assembler, labels, expressions, memory operands, validation against Keystone/console |
-| Hook builder | Partial (generator only) | 14-byte absolute JMP patch, NOP padding and trampoline return bytes; optional verified trampoline/patch write and original-byte restore; requires user-supplied original bytes and whole-instruction length | Executable allocation, instruction-boundary validation, register/flags preservation templates, safe install/remove and live testing |
-| Live debugger events | Partial (TCP listener) | Phone TCP 755 listener accepts 1184-byte payload event packets and displays LWP, status, RIP/RBP/RSP; starts before debugger attach; listener lifecycle cleaned up on activity destroy | Validate packet timing/endianness on console, reconnect/event loop hardening, breakpoint/watchpoint/step event classification |
