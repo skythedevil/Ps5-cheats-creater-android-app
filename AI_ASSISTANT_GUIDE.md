@@ -20,7 +20,7 @@
 7. AI proposes a next TurboScan action. In AI-assisted mode, the app applies valid read-only scan proposals automatically and loads the next result page. Manual mode still shows a confirmation dialog.
 8. AI may request candidate-bound read-only memory inspection. Writes and cheat activation remain explicitly gated by user approval and live-byte verification.
 9. AI-generated cheat drafts are validated and previewed; user approval adds the disabled draft to the same game's local cheat library.
-10. After each accepted draft, the app asks whether to add another cheat to the same game file or finish and export. GoldHEN JSON is the primary export option; MC4 is offered as an alternative for supported fixed section-0 patches.
+10. After each accepted draft, the app asks whether to add another cheat to the same game file or finish and export. Choosing another cheat opens a new cheat-goal prompt, ends the previous TurboScan session, resets the AI research context, and requires a fresh baseline search. GoldHEN JSON is the primary export option; MC4 is offered as an alternative for supported fixed section-0 patches.
 
 ## Screenshot analysis
 
