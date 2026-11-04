@@ -233,7 +233,7 @@ public class MainActivity extends Activity {
                 aiAssistedMode=true;aiBaselinePending=true;gameFile=null;
                 buildFullUi();gameName.setText(aiGameTitle);titleId.setText(aiGameTitleId);gameVersion.setText("");createGameFile();
                 aiMessages=new JSONArray();appendAiMessage("system",AI_SYSTEM_PROMPT);saveAiConversation();renderAiConversation();
-                sendAiText("Start a guided cheat research session. Game: "+aiGameTitle+". Title ID: "+(aiGameTitleId.isEmpty()?"unknown":aiGameTitleId)+". Desired cheat: "+aiGameGoal+". First help me connect to the PS5 and select the correct running game process. Once connected, the app will take an unknown-value baseline scan. After every scan, ask me to change the target game value and tell you the exact visible value or attach a screenshot. Choose the value type and TurboScan comparison settings yourself based on my observations and actual scan results. Never invent memory addresses. Continue refining until there is strong repeatable evidence. Only propose cheat bytes when supported by real evidence; ask before writing or applying anything. Keep adding approved cheats to this same game file. When I say finish, help export a compatible GoldHEN JSON file.");
+                sendAiText("Start a guided cheat research session. Game: "+aiGameTitle+". Title ID: "+(aiGameTitleId.isEmpty()?"unknown":aiGameTitleId)+". Desired cheat: "+aiGameGoal+". First help me connect to the PS5 and select the correct running game process. Once connected, select the actual game process and tap START AI SEARCH; the app will take an unknown-value baseline scan. After every scan, ask me to change the target game value and tell you the exact visible value or attach a screenshot. Choose the value type and TurboScan comparison settings yourself based on my observations and actual scan results. Never invent memory addresses. Continue refining until there is strong repeatable evidence. Only propose cheat bytes when supported by real evidence; ask before writing or applying anything. Keep adding approved cheats to this same game file. When I say finish, help export a compatible GoldHEN JSON file.");
             }).show();
     }
 
@@ -782,6 +782,7 @@ public class MainActivity extends Activity {
         logView = text("Ready.", 11, MUTED, false);
         logView.setTypeface(Typeface.MONOSPACE);
         page.addView(logView);
+        if(gameFile!=null){gameName.setText(gameFile.optString("game",""));titleId.setText(gameFile.optString("title_id",""));gameVersion.setText(gameFile.optString("version",""));refreshCheatList();}
     }
 
     private TextView logView;
@@ -3360,10 +3361,7 @@ public class MainActivity extends Activity {
             if (!"ps5cheat/1".equals(restored.optString("format")) ||
                     restored.optJSONArray("cheats") == null) return;
             gameFile = restored;
-            gameName.setText(gameFile.optString("game", ""));
-            titleId.setText(gameFile.optString("title_id", ""));
-            gameVersion.setText(gameFile.optString("version", ""));
-            refreshCheatList();
+            if(gameName!=null){gameName.setText(gameFile.optString("game", ""));titleId.setText(gameFile.optString("title_id", ""));gameVersion.setText(gameFile.optString("version", ""));refreshCheatList();}
             log("Restored saved game/cheat library from this device.");
         } catch (Exception e) {
             log("Saved cheat library could not be restored: " + e.getMessage());
