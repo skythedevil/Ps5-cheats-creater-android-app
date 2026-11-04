@@ -760,6 +760,8 @@ public class MainActivity extends Activity {
         Button aiRunScan=button("AI-APPROVED SCAN",PANEL),aiShareResults=button("SHARE RESULTS WITH AI",PANEL);
         aiScanRow.addView(aiRunScan,new LinearLayout.LayoutParams(0,dp(48),1));
         aiScanRow.addView(aiShareResults,new LinearLayout.LayoutParams(0,dp(48),1));page.addView(aiScanRow);
+        Button startAiSearch=button("START AI SEARCH (AFTER SELECTING GAME PROCESS)",ACCENT);page.addView(startAiSearch);
+        startAiSearch.setOnClickListener(v->{if(!connected){toast("Connect to the PS5 first.");return;}if(selectedPid<=0){toast("Select the running game process first.");return;}aiBaselinePending=true;startAiBaselineScan();});
         aiRunScan.setOnClickListener(v->runAiApprovedTurboScan());
         aiShareResults.setOnClickListener(v->shareTurboResultsWithAi());
         Button aiVerifyCandidates=button("VERIFY LOADED CANDIDATES (READ ONLY)",PANEL);page.addView(aiVerifyCandidates);
@@ -1393,7 +1395,6 @@ public class MainActivity extends Activity {
                 pid.setText(String.valueOf(selectedPid));
             }
             log("Loaded " + processes.size() + " process(es).");
-            if(aiAssistedMode&&aiBaselinePending&&!processes.isEmpty())startAiBaselineScan();
         });
     }
 
