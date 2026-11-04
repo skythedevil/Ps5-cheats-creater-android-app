@@ -6,6 +6,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.util.Xml;
@@ -45,6 +47,7 @@ public class MainActivity extends Activity {
     private static final int REQ_EXPORT_ADDRESS_TABLE = 27;
     private static final int REQ_EXPORT_HEX_PAGE = 28;
     private static final int REQ_IMPORT_HEX_PATCH = 29;
+    private static final int REQ_AI_SCREENSHOT = 30;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -659,6 +662,9 @@ public class MainActivity extends Activity {
         aiPromptInput.setSingleLine(false);aiPromptInput.setMinLines(2);aiPromptInput.setGravity(Gravity.TOP|Gravity.START);
         page.addView(aiPromptInput,new LinearLayout.LayoutParams(-1,dp(84)));
         aiSendButton=button("SEND TO AI ASSISTANT",ACCENT);page.addView(aiSendButton);
+        Button aiScreenButton=button("ANALYZE PS5 SCREENSHOT WITH AI",PANEL);page.addView(aiScreenButton);
+        TextView aiVisionNote=text("Choose a PS5 screenshot/image. For live automatic TV capture, connect a compatible USB HDMI UVC capture card; live UVC streaming is not yet integrated.",10,MUTED,false);page.addView(aiVisionNote);
+        aiScreenButton.setOnClickListener(v->pickAiScreenImage());
         LinearLayout aiScanRow=new LinearLayout(this);aiScanRow.setOrientation(LinearLayout.HORIZONTAL);
         Button aiRunScan=button("AI-APPROVED SCAN",PANEL),aiShareResults=button("SHARE RESULTS WITH AI",PANEL);
         aiScanRow.addView(aiRunScan,new LinearLayout.LayoutParams(0,dp(48),1));
@@ -698,6 +704,7 @@ public class MainActivity extends Activity {
         "Ask the user to report the exact visible value after each gameplay action, then explain which TurboScan comparison and value type to use. " +
         "Prefer small, reversible experiments. Explain how to refine candidates using changed/unchanged/increased/decreased scans. " +
         "Do not recommend memory writes, freezes, hooks, or remote function calls until a candidate is supported by repeated observations; always ask the user to confirm before any write or activation. " +
+        "When an image is attached, inspect only visible gameplay information such as health, ammo, money, coordinates, timers and on-screen labels; transcribe exact values, identify uncertainty, and never infer hidden memory addresses from pixels. Use the observed value to guide the next controlled scan. " +
         "When uncertain, say so and request the next observation. Respond in the user's language, preferably concise Hinglish. " +
         "When enough information exists for a read-only TurboScan, append one compact JSON object with keys explanation and action. action must contain type=turbo_scan, value_type (0-9 in app selector order), comparison (0-11 in app selector order), and value as a string. " +
         "Only propose a scan after the user reports a concrete observed value and game action; otherwise ask for that observation. " +
@@ -748,13 +755,77 @@ public class MainActivity extends Activity {
         if(connected)c.append(", selected PID=").append(selectedPid);
         c.append(". TurboScan controls available in the app: first scan, next scan, exact/bigger/smaller/between/increased/decreased/changed/unchanged comparisons, result paging and individual result editing. ");
         if(gameFile!=null)c.append(" Loaded game project: ").append(gameFile.optString("game")).append(", title ID: ").append(gameFile.optString("title_id")).append(", existing cheats: ").append(gameFile.optJSONArray("cheats")==null?0:gameFile.optJSONArray("cheats").length()).append(".");
-        c.append(" Screen capture is not currently connected; only use user-reported observations or actual app scan data.");
+        c.append(" Image analysis is available when the user attaches a PS5 screenshot; continuous HDMI/UVC video capture is not connected. Only use attached image observations, user-reported observations or actual app scan data.");
         return c.toString();
     }
     private void appendAiMessage(String role,String content){
         try{aiMessages.put(new JSONObject().put("role",role).put("content",content));}
         catch(JSONException e){log("Could not append AI conversation message: "+e.getMessage());}
     }
+
+    private void pickAiScreenImage(){
+        if(!AiAssistant.isConfigured(this)){toast("Configure and test an AI provider first.");return;}
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.addCategory(Intent.CATEGORY_OPENABLE);intent.setType("image/*");
+        startActivityForResult(intent,REQ_AI_SCREENSHOT);
+    }
+
+    private String encodeAiScreenImage(Uri uri)throws Exception{
+        BitmapFactory.Options bounds=new BitmapFactory.Options();bounds.inJustDecodeBounds=true;
+        try(InputStream in=getContentResolver().openInputStream(uri)){if(in==null)throw new IOException("Could not open selected image.");BitmapFactory.decodeStream(in,null,bounds);}
+        if(bounds.outWidth<=0||bounds.outHeight<=0)throw new IOException("Selected file is not a readable image.");
+        int sample=1;while(Math.max(bounds.outWidth/sample,bounds.outHeight/sample)>1280)sample*=2;
+        Bitmap bitmap;BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=sample;
+        try(InputStream in=getContentResolver().openInputStream(uri)){if(in==null)throw new IOException("Could not reopen selected image.");bitmap=BitmapFactory.decodeStream(in,null,options);}
+        if(bitmap==null)throw new IOException("Could not decode selected image.");
+        try{
+            ByteArrayOutputStream bytes=new ByteArrayOutputStream();
+            if(!bitmap.compress(Bitmap.CompressFormat.JPEG,82,bytes))throw new IOException("Could not compress screenshot.");
+            if(bytes.size()>5*1024*1024)throw new IOException("Screenshot is too large after compression.");
+            return "data:image/jpeg;base64,"+android.util.Base64.encodeToString(bytes.toByteArray(),android.util.Base64.NO_WRAP);
+        }finally{bitmap.recycle();}
+    }
+
+    private void analyzeAiScreenshot(Uri uri){
+        aiSendButton.setEnabled(false);aiStatusView.setText("PREPARING SCREEN IMAGE…");
+        aiWorker.execute(()->{
+            try{
+                String image=encodeAiScreenImage(uri);
+                String prompt=aiPromptInput.getText().toString().trim();
+                if(prompt.isEmpty())prompt="Read this PS5 gameplay screen. List every clearly visible numeric game value (health, ammo, money, coordinates, timer, etc.), label each value, and state confidence. Then recommend the safest next TurboScan observation. Do not invent addresses or claim memory verification.";
+                String finalPrompt=prompt+"\\n\\n[Image analysis request. App context: "+aiRuntimeContext()+"]";
+                JSONArray request=new JSONArray();
+                for(int i=0;i<aiMessages.length();i++)request.put(aiMessages.getJSONObject(i));
+                request.put(new JSONObject().put("role","user").put("content",finalPrompt));
+                String answer=AiAssistant.chatWithImage(this,request,image);
+                main.post(()->{
+                    appendAiMessage("user",finalPrompt+" [PS5 screenshot attached]");
+                    handleAiAnswer(answer);aiPromptInput.setText("");
+                });
+            }catch(Exception e){
+                main.post(()->{aiSendButton.setEnabled(true);aiStatusView.setText("SCREEN ANALYSIS FAILED: "+e.getMessage());toast("AI image analysis failed: "+e.getMessage());});
+            }
+        });
+    }
+
+    private void handleAiAnswer(String answer){
+        AiMemoryActionProtocol.Proposal memoryProposal=AiMemoryActionProtocol.parse(answer);
+        JSONObject cheatDraft=AiCheatDraftProtocol.parse(answer);
+        AiActionProtocol.Proposal proposal=AiActionProtocol.parse(answer);
+        if(memoryProposal!=null){
+            appendAiMessage("assistant",memoryProposal.explanation+"\\n\\nPROPOSED MEMORY ACTION: "+memoryProposal.summary());
+            showAiMemoryActionApproval(memoryProposal);
+        }else if(cheatDraft!=null){
+            appendAiMessage("assistant",cheatDraft.optString("explanation","AI prepared a cheat draft.")+"\\n\\nPROPOSED CHEAT: "+cheatDraft.optString("name","Unnamed"));
+            showAiCheatDraftApproval(cheatDraft);
+        }else if(proposal!=null){
+            appendAiMessage("assistant",proposal.explanation+"\\n\\nPROPOSED APP ACTION: "+proposal.summary());
+            showAiScanApproval(proposal);
+        }else appendAiMessage("assistant",answer);
+        while(aiMessages.length()>41)aiMessages.remove(1);
+        saveAiConversation();renderAiConversation();aiSendButton.setEnabled(true);
+        aiStatusView.setText("CONNECTED  •  conversation saved locally.");
+    }
+
     private void sendAiMessage(){
         String prompt=aiPromptInput.getText().toString().trim();
         if(prompt.isEmpty())return;
@@ -768,25 +839,7 @@ public class MainActivity extends Activity {
             for(int i=0;i<aiMessages.length();i++)request.put(aiMessages.getJSONObject(i));
             aiWorker.execute(()->{
                 try{
-                    String answer=AiAssistant.chat(this,request);
-                    main.post(()->{
-                        AiMemoryActionProtocol.Proposal memoryProposal=AiMemoryActionProtocol.parse(answer);
-                        JSONObject cheatDraft=AiCheatDraftProtocol.parse(answer);
-                        AiActionProtocol.Proposal proposal=AiActionProtocol.parse(answer);
-                        if(memoryProposal!=null){
-                            appendAiMessage("assistant",memoryProposal.explanation+"\\n\\nPROPOSED MEMORY ACTION: "+memoryProposal.summary());
-                            showAiMemoryActionApproval(memoryProposal);
-                        }else if(cheatDraft!=null){
-                            appendAiMessage("assistant",cheatDraft.optString("explanation","AI prepared a cheat draft.")+"\\n\\nPROPOSED CHEAT: "+cheatDraft.optString("name","Unnamed"));
-                            showAiCheatDraftApproval(cheatDraft);
-                        }else if(proposal!=null){
-                            appendAiMessage("assistant",proposal.explanation+"\\n\\nPROPOSED APP ACTION: "+proposal.summary());
-                            showAiScanApproval(proposal);
-                        }else appendAiMessage("assistant",answer);
-                        while(aiMessages.length()>41)aiMessages.remove(1);
-                        saveAiConversation();renderAiConversation();aiSendButton.setEnabled(true);
-                        aiStatusView.setText("CONNECTED  •  conversation saved locally.");
-                    });
+                    String answer=AiAssistant.chat(this,request);                    main.post(()->handleAiAnswer(answer));
                 }catch(Exception e){
                     main.post(()->{
                         appendAiMessage("assistant","AI request failed: "+e.getMessage());
