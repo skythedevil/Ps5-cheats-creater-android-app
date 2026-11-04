@@ -23,6 +23,8 @@ This repository is an in-progress Android port. Several major desktop workflows 
 
 See [FEATURE_STATUS.md](FEATURE_STATUS.md) for exact implemented/partial/pending distinctions and [PARITY_CHECKLIST.md](PARITY_CHECKLIST.md) for the release gate.
 
+AI chat supports structured, validated TurboScan proposals with an explicit user approval step; the action is read-only and does not perform memory writes.
+
 ## Important limitations
 
 - Many operations remain unverified on a physical PS5. Payload version, firmware, permissions, network routing and game state can affect support.

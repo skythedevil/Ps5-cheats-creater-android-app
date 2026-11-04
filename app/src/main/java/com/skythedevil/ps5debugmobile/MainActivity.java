@@ -738,7 +738,11 @@ public class MainActivity extends Activity {
                 try{
                     String answer=AiAssistant.chat(this,request);
                     main.post(()->{
-                        appendAiMessage("assistant",answer);
+                        AiActionProtocol.Proposal proposal=AiActionProtocol.parse(answer);
+                        if(proposal!=null){
+                            appendAiMessage("assistant",proposal.explanation+"\\n\\nPROPOSED APP ACTION: "+proposal.summary());
+                            showAiScanApproval(proposal);
+                        }else appendAiMessage("assistant",answer);
                         while(aiMessages.length()>41)aiMessages.remove(1);
                         saveAiConversation();renderAiConversation();aiSendButton.setEnabled(true);
                         aiStatusView.setText("CONNECTED  •  conversation saved locally.");
@@ -752,6 +756,21 @@ public class MainActivity extends Activity {
                 }
             });
         }catch(Exception e){toast("Cannot send AI message: "+e.getMessage());aiSendButton.setEnabled(true);}
+    }
+
+    private void showAiScanApproval(AiActionProtocol.Proposal proposal){
+        if(!connected){toast("Connect to the PS5 before approving this scan.");return;}
+        new android.app.AlertDialog.Builder(this).setTitle("Review AI scan action")
+            .setMessage(proposal.summary()+"\\n\\nRead-only scan only. No memory will be written.")
+            .setNegativeButton("CANCEL",null).setPositiveButton("APPROVE & RUN",(d,w)->{
+                if(proposal.valueType<0||proposal.valueType>=turboType.getCount()||proposal.compare<0||proposal.compare>=turboCompare.getCount()){
+                    toast("Unsupported AI scan settings.");return;
+                }
+                turboType.setSelection(proposal.valueType);
+                turboCompare.setSelection(proposal.compare);
+                turboValue.setText(proposal.value);
+                if(turboActive&&scanClient!=null)turboNextScan();else turboFirstScan();
+            }).show();
     }
 
     private void runAiApprovedTurboScan(){

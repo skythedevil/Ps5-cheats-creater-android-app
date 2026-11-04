@@ -37,3 +37,17 @@ Those require a structured tool-call layer over the existing scanner/editor, a p
 - API calls require internet access and may incur provider charges.
 - The API key is encrypted at rest on the device; removing app data or uninstalling the app may remove access to the saved key.
 - AI output is untrusted advice. Treat candidate addresses as unverified until repeated memory observations support them.
+
+
+## Approved scanner actions
+
+AI may return a structured action with its explanation:
+
+```json
+{
+  "explanation": "Track the visible value and refine after changing it.",
+  "action": {"type":"turbo_scan","value_type":4,"comparison":0,"value":"100"}
+}
+```
+
+The app validates selector indices, previews exact scan settings, and waits for an explicit approval tap. This workflow only starts/refines a read-only TurboScan. AI cannot directly write memory, freeze values, install hooks or call remote functions.
