@@ -674,7 +674,8 @@ public class MainActivity extends Activity {
         "Do not recommend memory writes, freezes, hooks, or remote function calls until a candidate is supported by repeated observations; always ask the user to confirm before any write or activation. " +
         "When uncertain, say so and request the next observation. Respond in the user's language, preferably concise Hinglish. " +
         "When enough information exists for a read-only TurboScan, append one compact JSON object with keys explanation and action. action must contain type=turbo_scan, value_type (0-9 in app selector order), comparison (0-11 in app selector order), and value as a string. " +
-        "Never propose memory writes or freeze operations as executable actions. Only propose a scan after the user reports a concrete observed value and game action; otherwise ask for that observation.";
+        "Never propose memory writes or freeze operations as executable actions. Only propose a scan after the user reports a concrete observed value and game action; otherwise ask for that observation. " +
+        "When the user explicitly asks to create a cheat and supplies verified address(es) and patch byte(s), append one JSON object with explanation and action={type:create_cheat,name,mode,steps:[{op:patch,addr,type:hex,value}]}. Use only addresses supplied by the user or actual app scan results; never invent addresses or bytes. Limit to 32 patch steps and 4096 bytes per step. The app validates and asks approval to save a disabled draft; this does not apply it to memory.";
 
     private void loadAiConversation(){
         try{
@@ -718,7 +719,8 @@ public class MainActivity extends Activity {
         StringBuilder c=new StringBuilder("App context: PS5 connected=").append(connected);
         if(connected)c.append(", selected PID=").append(selectedPid);
         c.append(". TurboScan controls available in the app: first scan, next scan, exact/bigger/smaller/between/increased/decreased/changed/unchanged comparisons, result paging and individual result editing. ");
-        c.append("Screen capture is not currently connected to this assistant; only use values the user explicitly reports.");
+        if(gameFile!=null)c.append(" Loaded game project: ").append(gameFile.optString("game")).append(", title ID: ").append(gameFile.optString("title_id")).append(", existing cheats: ").append(gameFile.optJSONArray("cheats")==null?0:gameFile.optJSONArray("cheats").length()).append(".");
+        c.append(" Screen capture is not currently connected; only use user-reported observations or actual app scan data.");
         return c.toString();
     }
     private void appendAiMessage(String role,String content){
@@ -740,8 +742,12 @@ public class MainActivity extends Activity {
                 try{
                     String answer=AiAssistant.chat(this,request);
                     main.post(()->{
+                        JSONObject cheatDraft=AiCheatDraftProtocol.parse(answer);
                         AiActionProtocol.Proposal proposal=AiActionProtocol.parse(answer);
-                        if(proposal!=null){
+                        if(cheatDraft!=null){
+                            appendAiMessage("assistant",cheatDraft.optString("explanation","AI prepared a cheat draft.")+"\\n\\nPROPOSED CHEAT: "+cheatDraft.optString("name","Unnamed"));
+                            showAiCheatDraftApproval(cheatDraft);
+                        }else if(proposal!=null){
                             appendAiMessage("assistant",proposal.explanation+"\\n\\nPROPOSED APP ACTION: "+proposal.summary());
                             showAiScanApproval(proposal);
                         }else appendAiMessage("assistant",answer);
@@ -758,6 +764,33 @@ public class MainActivity extends Activity {
                 }
             });
         }catch(Exception e){toast("Cannot send AI message: "+e.getMessage());aiSendButton.setEnabled(true);}
+    }
+
+    private void showAiCheatDraftApproval(JSONObject draft){
+        if(gameFile==null){toast("Create or import the target game's cheat file first.");return;}
+        if(!enabledCheats.isEmpty()){toast("Restore active cheats before adding an AI draft.");return;}
+        JSONArray steps=draft.optJSONArray("steps");
+        StringBuilder preview=new StringBuilder("Name: ").append(draft.optString("name","AI Cheat"))
+            .append("\\nMode: ").append(draft.optString("mode","toggle"))
+            .append("\\nSteps: ").append(steps==null?0:steps.length()).append("\\n\\n");
+        if(steps!=null)for(int i=0;i<steps.length();i++){
+            JSONObject step=steps.optJSONObject(i);
+            if(step!=null)preview.append(i+1).append(". ").append(step.optString("addr"))
+                .append(" → ").append(step.optString("value")).append("\\n");
+        }
+        preview.append("\\nThis saves a disabled draft only. It does NOT write to PS5 memory.");
+        new android.app.AlertDialog.Builder(this).setTitle("Review AI-generated cheat")
+            .setMessage(preview.toString()).setNegativeButton("DISCARD",null)
+            .setPositiveButton("ADD TO CHEAT LIBRARY",(d,w)->{
+                try{
+                    JSONObject validated=AiCheatDraftProtocol.validate(draft);
+                    JSONArray cheats=gameFile.optJSONArray("cheats");
+                    if(cheats==null){cheats=new JSONArray();gameFile.put("cheats",cheats);}
+                    cheats.put(validated);persistGameFile();refreshCheatList();
+                    log("AI cheat draft saved locally; no memory write was performed.");
+                    toast("AI draft added disabled. Review before applying.");
+                }catch(Exception e){toast("AI draft rejected: "+e.getMessage());}
+            }).show();
     }
 
     private void showAiScanApproval(AiActionProtocol.Proposal proposal){

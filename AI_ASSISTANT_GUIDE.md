@@ -51,3 +51,8 @@ AI may return a structured action with its explanation:
 ```
 
 The app validates selector indices, previews exact scan settings, and waits for an explicit approval tap. This workflow only starts/refines a read-only TurboScan. AI cannot directly write memory, freeze values, install hooks or call remote functions.
+
+
+## AI-generated cheat drafts
+
+When the user supplies real candidate addresses and patch bytes, the assistant can propose a `create_cheat` JSON action. The app accepts only fixed-address hex patch steps (1–32 steps, max 4096 bytes each), validates addresses and byte pairs, previews the draft, and requires approval to save it disabled in the local game library. Saving never writes to PS5 memory; the user must separately review and apply it. The assistant must not invent addresses or bytes. This is limited to fixed-address PS5Debug patch cheats, not a universal cross-platform cheat format.

@@ -44,3 +44,8 @@ Your Android device and PS5 must be on the same reachable network, with a compat
 ## License
 
 The mobile implementation is released under Apache-2.0. The original project is https://github.com/alfizari/PS5Debug-studio.
+
+
+## AI-assisted cheat drafts
+
+The in-app assistant can propose a validated fixed-address hex patch cheat using addresses and bytes supplied by the user or actual app scan results. The app previews it and requires approval before saving it disabled in the local game library. Saving is not execution: no PS5 memory is changed until the user separately reviews and applies the cheat. Address discovery, patch correctness and physical-console testing remain user-verified. The current backend is PS5Debug/ps5debug-NG, not a universal Android memory engine for every console or game platform.
