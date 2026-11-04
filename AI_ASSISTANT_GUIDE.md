@@ -6,7 +6,7 @@
 - Choosing No records that choice and future launches open directly to the home screen.
 - Choosing Yes opens provider, model, endpoint and API-key settings. The user can also continue without AI.
 - The API key is encrypted with AES-GCM using Android Keystore. Provider settings persist locally; blank key input retains the saved key.
-- On later launches, the app does not ask the integration question again. The home screen offers Simple Search, AI-assisted Search, AI Settings and Advanced PS5 Tools.
+- On later launches, the app does not ask the integration question again. The home screen offers Simple Search, AI-assisted Search, AI Settings and Advanced PS5 Tools. Simple Search opens a focused screen with only console connection, process selection, TurboScan controls and the game cheat file editor; Advanced PS5 Tools opens the full tool suite.
 - OpenRouter requests include HTTP-Referer and X-Title headers.
 
 ## AI-assisted search flow
@@ -14,7 +14,7 @@
 1. The user enters game name, optional title ID, and the cheat they want (for example, infinite health).
 2. The app creates a new game project for that game and opens the PS5 connection/process screen.
 3. The user connects and selects the actual game process, then taps **START AI SEARCH**.
-4. The app begins a read-only unknown-initial-value TurboScan baseline (4-byte unsigned numeric type, writable regions, skips slow regions). This is only a starting strategy; the AI may choose later scan type/comparison settings from the user's observations and actual results.
+4. The user taps START AI SEARCH after selecting the game process. AI chooses the numeric type and proposes an unknown-initial-value baseline scan; the app applies that read-only scan. The default scan scope prioritizes writable regions and skips slow regions. AI chooses later scan types/comparisons from the user's observations and actual results.
 5. After each scan, the app loads a page of real results and sends up to 40 candidates (addresses and current/previous bytes) to AI.
 6. AI asks the user to perform one controlled in-game action and report the exact visible value or attach a screenshot. The user can type the value or use **ATTACH GAME SCREENSHOT**.
 7. AI proposes a next TurboScan action. In AI-assisted mode, the app applies valid read-only scan proposals automatically and loads the next result page. Manual mode still shows a confirmation dialog.
