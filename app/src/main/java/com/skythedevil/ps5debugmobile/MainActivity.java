@@ -230,9 +230,9 @@ public class MainActivity extends Activity {
             .setNegativeButton("CANCEL",null).setPositiveButton("START",(d,w)->{
                 aiGameTitle=game.getText().toString().trim();aiGameTitleId=title.getText().toString().trim();aiGameGoal=goal.getText().toString().trim();
                 if(aiGameTitle.isEmpty()||aiGameGoal.isEmpty()){toast("Enter the game name and the cheat you want.");return;}
-                aiAssistedMode=true;aiBaselinePending=true;aiMessages=new JSONArray();saveAiConversation();
+                aiAssistedMode=true;aiBaselinePending=true;gameFile=null;
                 buildFullUi();gameName.setText(aiGameTitle);titleId.setText(aiGameTitleId);gameVersion.setText("");createGameFile();
-                appendAiMessage("system",AI_SYSTEM_PROMPT);
+                aiMessages=new JSONArray();appendAiMessage("system",AI_SYSTEM_PROMPT);saveAiConversation();renderAiConversation();
                 sendAiText("Start a guided cheat research session. Game: "+aiGameTitle+". Title ID: "+(aiGameTitleId.isEmpty()?"unknown":aiGameTitleId)+". Desired cheat: "+aiGameGoal+". First help me connect to the PS5 and select the correct running game process. Once connected, the app will take an unknown-value baseline scan. After every scan, ask me to change the target game value and tell you the exact visible value or attach a screenshot. Choose the value type and TurboScan comparison settings yourself based on my observations and actual scan results. Never invent memory addresses. Continue refining until there is strong repeatable evidence. Only propose cheat bytes when supported by real evidence; ask before writing or applying anything. Keep adding approved cheats to this same game file. When I say finish, help export a compatible GoldHEN JSON file.");
             }).show();
     }
@@ -968,8 +968,22 @@ public class MainActivity extends Activity {
                     cheats.put(validated);persistGameFile();refreshCheatList();
                     log("AI cheat draft saved locally; no memory write was performed.");
                     toast("AI draft added disabled. Review before applying.");
+                    if(aiAssistedMode)new android.app.AlertDialog.Builder(this).setTitle("Cheat added to this game file")
+                        .setMessage("Do you want to add another cheat to the same file, or finish and export?")
+                        .setNegativeButton("FINISH & EXPORT",(dialog,which)->showAiExportChoices())
+                        .setPositiveButton("ADD ANOTHER CHEAT",(dialog,which)->sendAiText("The previous cheat has been added to the same game file. I want to create another cheat for "+aiGameTitle+". Ask me which new cheat I want, then guide the next search and append the approved cheat to this same file."))
+                        .show();
                 }catch(Exception e){toast("AI draft rejected: "+e.getMessage());}
             }).show();
+    }
+
+    private void showAiExportChoices(){
+        if(gameFile==null||gameFile.optJSONArray("cheats")==null||gameFile.optJSONArray("cheats").length()==0){toast("There are no cheats to export yet.");return;}
+        new android.app.AlertDialog.Builder(this).setTitle("Export game cheat file")
+            .setMessage("GoldHEN JSON is the primary export format. MC4 is also available for supported fixed section-0 patches.")
+            .setPositiveButton("GOLDHEN JSON",(d,w)->exportGoldHenJson())
+            .setNegativeButton("MC4 FILE",(d,w)->exportMc4())
+            .setNeutralButton("KEEP EDITING",null).show();
     }
 
     private void showAiMemoryActionApproval(AiMemoryActionProtocol.Proposal proposal){
@@ -2352,7 +2366,7 @@ public class MainActivity extends Activity {
             byte[] value=encodeTurboCompareValue(turboValueType,compare,turboValue.getText().toString().trim());
             turboResultTotal=scanClient.turboNextScan(compare,value,turboValueLength);
             return "Next Scan complete. Remaining results: "+turboResultTotal;
-        },result->{turboResultStart.setText("0");lastTurboResults.clear();renderTurboRows();turboResult.setText(result);});
+        },result->{turboResultStart.setText("0");lastTurboResults.clear();renderTurboRows();turboResult.setText(result);if(aiAssistedMode)turboLoadResults();});
     }
     private void moveTurboPage(int direction) {
         try {
