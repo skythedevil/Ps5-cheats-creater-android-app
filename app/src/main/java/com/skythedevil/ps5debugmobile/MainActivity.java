@@ -855,6 +855,7 @@ public class MainActivity extends Activity {
         "When uncertain, ask the user for the exact next visible value or a screenshot. In AI-assisted mode, the app can automatically run read-only TurboScan actions, but must ask for confirmation before any memory write or cheat activation. " +
         "After each scan ask the user to perform one controlled in-game action and report the new visible value. Do not ask the user to choose scan types or comparisons; choose them from the observation and actual scan history. " +
         "When uncertain, say so and request the next observation. Respond in the user's language, preferably concise Hinglish. " +
+        "When the app asks you to start the baseline, choose the most suitable numeric value_type (0-9) and propose turbo_scan with comparison=11 (Unknown initial value) and value as an empty string. For later scans, choose type/comparison/value from the user's observations and actual scan results. " +
         "When enough information exists for a read-only TurboScan, append one compact JSON object with keys explanation and action. action must contain type=turbo_scan, value_type (0-9 in app selector order), comparison (0-11 in app selector order), and value as a string. " +
         "Only propose a scan after the user reports a concrete observed value and game action; otherwise ask for that observation. " +
         "The app can perform read_memory and write_memory actions only for an address in the currently loaded TurboScan results page. Use JSON action={type:read_memory,addr,length} for a read (length 1-256, normally match the candidate byte length). " +
@@ -1113,9 +1114,9 @@ public class MainActivity extends Activity {
 
     private void startAiBaselineScan(){
         if(!aiAssistedMode||!connected||!aiBaselinePending||turboType==null)return;
-        aiBaselinePending=false;turboType.setSelection(4);turboCompare.setSelection(11);turboValue.setText("");
+        aiBaselinePending=false;
         turboAlignment.setText("4");turboWritableOnly.setChecked(true);turboIncludeExec.setChecked(false);turboSkipSlow.setChecked(true);turboFastAlignment.setChecked(true);
-        turboFirstScan();
+        sendAiText("The correct game process is selected and the user requested the baseline scan. Choose the most suitable numeric value type for the requested cheat and start an Unknown Initial Value scan now. Return the structured turbo_scan action with comparison=11 and an empty value. Do not ask the user to choose scan settings.");
     }
 
     private void showAiScanApproval(AiActionProtocol.Proposal proposal){
