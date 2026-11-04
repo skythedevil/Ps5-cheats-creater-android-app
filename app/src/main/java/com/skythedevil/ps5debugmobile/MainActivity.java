@@ -793,6 +793,7 @@ public class MainActivity extends Activity {
                 String prompt=aiPromptInput.getText().toString().trim();
                 if(prompt.isEmpty())prompt="Read this PS5 gameplay screen. List every clearly visible numeric game value (health, ammo, money, coordinates, timer, etc.), label each value, and state confidence. Then recommend the safest next TurboScan observation. Do not invent addresses or claim memory verification.";
                 String finalPrompt=prompt+"\\n\\n[Image analysis request. App context: "+aiRuntimeContext()+"]";
+                if(aiMessages.length()==0)appendAiMessage("system",AI_SYSTEM_PROMPT);
                 JSONArray request=new JSONArray();
                 for(int i=0;i<aiMessages.length();i++)request.put(aiMessages.getJSONObject(i));
                 request.put(new JSONObject().put("role","user").put("content",finalPrompt));
