@@ -1,33 +1,37 @@
 # In-app AI Cheat Creator
 
-## Provider setup and saved key
+## Startup and one-time AI setup
 
-- Configure OpenAI, OpenRouter, or a custom OpenAI-compatible endpoint.
-- API key is encrypted with AES-GCM using Android Keystore; leave the key field blank to retain the saved key.
-- Provider endpoint/model and chat history persist locally. Disconnect AI removes the stored configuration and Keystore key.
+- On first launch, the app asks whether the user wants AI integration.
+- Choosing No records that choice and future launches open directly to the home screen.
+- Choosing Yes opens provider, model, endpoint and API-key settings. The user can also continue without AI.
+- The API key is encrypted with AES-GCM using Android Keystore. Provider settings persist locally; blank key input retains the saved key.
+- On later launches, the app does not ask the integration question again. The home screen offers Simple Search, AI-assisted Search, AI Settings and Advanced PS5 Tools.
 - OpenRouter requests include HTTP-Referer and X-Title headers.
-- Image analysis requires a model that accepts image input. The OpenRouter preset uses `openai/gpt-4o-mini`; model availability and billing depend on the user's provider account.
 
-## PS5 screen image analysis
+## AI-assisted search flow
 
-The AI section has an **ANALYZE PS5 SCREENSHOT WITH AI** action. It opens Android's image picker, downsamples the selected image to a maximum 1280-pixel edge, JPEG-compresses it, and sends it as a multimodal chat-completions message. The AI is instructed to read only visible gameplay values (such as health, ammo, money, coordinates and timers), report uncertainty, and use those observations to suggest a controlled scan. The image itself is not persisted in chat history; the textual conversation is saved locally.
+1. The user enters game name, optional title ID, and the cheat they want (for example, infinite health).
+2. The app creates a new game project for that game and opens the PS5 connection/process screen.
+3. The user connects and selects the actual game process, then taps **START AI SEARCH**.
+4. The app begins a read-only unknown-initial-value TurboScan baseline (4-byte unsigned numeric type, writable regions, skips slow regions). This is only a starting strategy; the AI may choose later scan type/comparison settings from the user's observations and actual results.
+5. After each scan, the app loads a page of real results and sends up to 40 candidates (addresses and current/previous bytes) to AI.
+6. AI asks the user to perform one controlled in-game action and report the exact visible value or attach a screenshot. The user can type the value or use **ATTACH GAME SCREENSHOT**.
+7. AI proposes a next TurboScan action. In AI-assisted mode, the app applies valid read-only scan proposals automatically and loads the next result page. Manual mode still shows a confirmation dialog.
+8. AI may request candidate-bound read-only memory inspection. Writes and cheat activation remain explicitly gated by user approval and live-byte verification.
+9. AI-generated cheat drafts are validated and previewed; user approval adds the disabled draft to the same game's local cheat library.
+10. After each accepted draft, the app asks whether to add another cheat to the same game file or finish and export. GoldHEN JSON is the primary export option; MC4 is offered as an alternative for supported fixed section-0 patches.
 
-This is screenshot-based vision, not continuous live capture. To capture a TV/monitor feed, the phone needs a compatible HDMI-to-USB UVC capture device and app-side UVC camera integration. Live UVC streaming, automatic frame sampling and video analysis are still pending. Android screen recording/MediaProjection cannot see a separate TV's HDMI output.
+## Screenshot analysis
 
-## Controlled AI cheat workflow
+The screenshot picker accepts an image selected by the user and sends a compressed image to a multimodal chat-completions model. The AI can transcribe visible values and state uncertainty. There is no HDMI capture-card requirement or continuous live capture feature.
 
-- AI can propose a first or next TurboScan; the app previews the type/comparison/value and requires the user to approve before running a read-only scan.
-- The user can share up to 40 currently loaded TurboScan candidates (addresses and current/previous bytes) with AI.
-- The user can approve read-only memory reads restricted to addresses and lengths in the currently loaded TurboScan results page.
-- The user can approve a memory write only for a loaded candidate and explicit replacement bytes supplied in the conversation. The app reads live bytes, previews before/after, requires a second explicit approval, rechecks the original bytes, writes once, verifies read-back and attempts rollback if the write fails.
-- The **VERIFY LOADED CANDIDATES (READ ONLY)** action compares up to 40 candidate snapshots against live process memory. A byte match only proves the snapshot still matches; it does not prove the address controls a particular game mechanic. Repeat controlled gameplay changes and scans before trusting a candidate.
-- AI can propose a fixed-address hex cheat draft only from supplied/observed addresses and bytes. The app validates 1–32 patch steps (up to 4096 bytes each), previews the draft, and requires approval to save it disabled in the local game library. Saving a draft does not write to PS5 memory or prove the cheat effect.
-- Existing cheat apply/restore paths use read-back verification and rollback attempts. Actual in-game effect still requires manual console/gameplay validation.
+## Cheat-file compatibility and limitations
 
-## Safety and limitations
-
-- AI cannot infer memory addresses from pixels. Screen observations and memory candidates are separate evidence.
-- No arbitrary shell commands, arbitrary remote payloads, or AI-generated code are executed.
-- Memory writes, cheat application and activation remain user-controlled.
-- Never commit API keys into GitHub or logs. API requests require internet and may incur provider charges.
-- Physical PS5 protocol/device testing and end-to-end cheat-effect verification remain necessary before calling any cheat verified.
+- Native local project format is `ps5cheat/1`; the app can export GoldHEN JSON, SHN XML and MC4 for supported fixed-address hex patches.
+- GoldHEN JSON export supports only fixed hex patches with absolute addresses or supported main-module offsets. Unsupported steps/addresses must be rejected rather than silently converted.
+- MC4 export passes through the existing SHN fixed section-0 conversion and encryption path. It is not a universal format for every PS5 cheat loader.
+- A candidate value changing with gameplay is not sufficient by itself to prove it controls the desired mechanic. Strong evidence requires repeated controlled changes and candidate refinement.
+- Runtime addresses can move between sessions. A stable module-relative offset or a verified game/version-specific patch is needed for a reusable cheat file.
+- No universal automatic cheat can be guaranteed for every game. PS5 payload compatibility, title version, memory layout, ASLR and game-specific code matter.
+- Memory writes, cheat application and activation remain user-controlled. Actual in-game effect requires console/gameplay validation.
