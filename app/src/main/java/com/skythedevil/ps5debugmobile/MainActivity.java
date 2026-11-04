@@ -617,7 +617,7 @@ public class MainActivity extends Activity {
         page.addView(kernelLogView,new LinearLayout.LayoutParams(-1,dp(190)));
         kernelLogButton.setOnClickListener(v->{if(kernelLogRunning)stopKernelLog();else startKernelLog();});
 
-        section(page, "08A  AI CHEAT CREATOR", "Connect an AI provider once, then work through cheat discovery conversationally. The assistant can plan scans and interpret user-reported values; live screen capture and autonomous scan control are separate integrations.");
+        section(page, "08A  AI CHEAT CREATOR", "Connect an AI provider once. Analyse attached PS5 screenshots, guide approved TurboScans, inspect live candidate bytes, and create disabled cheat drafts for review. Continuous HDMI video capture still requires a future UVC integration.");
         aiStatusView=text(AiAssistant.isConfigured(this)?"AI CONFIGURED  •  API key stored encrypted on this device.":"AI NOT CONFIGURED  •  Save a provider endpoint, model and API key.",11,MUTED,true);
         page.addView(aiStatusView);
         TextView providerLabel=text("AI PROVIDER",10,MUTED,true);page.addView(providerLabel);
