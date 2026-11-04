@@ -69,6 +69,26 @@ public final class AiAssistant {
         cipher.init(Cipher.DECRYPT_MODE,getOrCreateKey(),new GCMParameterSpec(128,Base64.decode(ivText,Base64.NO_WRAP)));
         return new String(cipher.doFinal(Base64.decode(cipherText,Base64.NO_WRAP)),StandardCharsets.UTF_8);
     }
+    /** Sends the last user message with an attached JPEG data URL to a vision-capable OpenAI-compatible model. */
+    public static String chatWithImage(Context c,JSONArray messages,String imageDataUrl)throws Exception{
+        if(messages==null||messages.length()==0)throw new IOException("Add a screen description before attaching an image.");
+        if(imageDataUrl==null||!imageDataUrl.startsWith("data:image/jpeg;base64,")||imageDataUrl.length()>7*1024*1024)
+            throw new IOException("Invalid or oversized screen image.");
+        JSONArray copy=new JSONArray();
+        for(int i=0;i<messages.length();i++){
+            JSONObject original=messages.getJSONObject(i);
+            JSONObject item=new JSONObject(original.toString());
+            if(i==messages.length()-1&&"user".equals(item.optString("role"))){
+                String prompt=item.optString("content","");
+                JSONArray content=new JSONArray();
+                content.put(new JSONObject().put("type","text").put("text",prompt));
+                content.put(new JSONObject().put("type","image_url").put("image_url",new JSONObject().put("url",imageDataUrl).put("detail","high")));
+                item.put("content",content);
+            }
+            copy.put(item);
+        }
+        return chat(c,copy);
+    }
     public static String chat(Context c,JSONArray messages)throws Exception{
         String endpoint=endpoint(c).replaceAll("/+$","");
         if(!endpoint.endsWith("/chat/completions"))endpoint+="/chat/completions";
