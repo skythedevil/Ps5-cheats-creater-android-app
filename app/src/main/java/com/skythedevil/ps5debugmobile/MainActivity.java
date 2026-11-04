@@ -674,7 +674,9 @@ public class MainActivity extends Activity {
         "Do not recommend memory writes, freezes, hooks, or remote function calls until a candidate is supported by repeated observations; always ask the user to confirm before any write or activation. " +
         "When uncertain, say so and request the next observation. Respond in the user's language, preferably concise Hinglish. " +
         "When enough information exists for a read-only TurboScan, append one compact JSON object with keys explanation and action. action must contain type=turbo_scan, value_type (0-9 in app selector order), comparison (0-11 in app selector order), and value as a string. " +
-        "Never propose memory writes or freeze operations as executable actions. Only propose a scan after the user reports a concrete observed value and game action; otherwise ask for that observation. " +
+        "Only propose a scan after the user reports a concrete observed value and game action; otherwise ask for that observation. " +
+        "The app can perform read_memory and write_memory actions only for an address in the currently loaded TurboScan results page. Use JSON action={type:read_memory,addr,length} for a read (length 1-256, normally match the candidate byte length). " +
+        "A write_memory action must be based on a candidate address and byte length shown in the latest shared TurboScan results, and the user must have explicitly stated the desired replacement bytes. Use action={type:write_memory,addr,value} where value is complete hex byte pairs with no more than 256 bytes. Never guess an address or replacement bytes. The app will read live bytes, show a before/after preview, require explicit approval, re-check that bytes have not changed, write once, verify read-back and attempt rollback on failure. " +
         "When the user explicitly asks to create a cheat and supplies verified address(es) and patch byte(s), append one JSON object with explanation and action={type:create_cheat,name,mode,steps:[{op:patch,addr,type:hex,value}]}. Use only addresses supplied by the user or actual app scan results; never invent addresses or bytes. Limit to 32 patch steps and 4096 bytes per step. The app validates and asks approval to save a disabled draft; this does not apply it to memory.";
 
     private void loadAiConversation(){
@@ -742,9 +744,13 @@ public class MainActivity extends Activity {
                 try{
                     String answer=AiAssistant.chat(this,request);
                     main.post(()->{
+                        AiMemoryActionProtocol.Proposal memoryProposal=AiMemoryActionProtocol.parse(answer);
                         JSONObject cheatDraft=AiCheatDraftProtocol.parse(answer);
                         AiActionProtocol.Proposal proposal=AiActionProtocol.parse(answer);
-                        if(cheatDraft!=null){
+                        if(memoryProposal!=null){
+                            appendAiMessage("assistant",memoryProposal.explanation+"\\n\\nPROPOSED MEMORY ACTION: "+memoryProposal.summary());
+                            showAiMemoryActionApproval(memoryProposal);
+                        }else if(cheatDraft!=null){
                             appendAiMessage("assistant",cheatDraft.optString("explanation","AI prepared a cheat draft.")+"\\n\\nPROPOSED CHEAT: "+cheatDraft.optString("name","Unnamed"));
                             showAiCheatDraftApproval(cheatDraft);
                         }else if(proposal!=null){
@@ -791,6 +797,65 @@ public class MainActivity extends Activity {
                     toast("AI draft added disabled. Review before applying.");
                 }catch(Exception e){toast("AI draft rejected: "+e.getMessage());}
             }).show();
+    }
+
+    private void showAiMemoryActionApproval(AiMemoryActionProtocol.Proposal proposal){
+        if(!connected||client==null){toast("Connect to the PS5 before approving a memory action.");return;}
+        PS5Client.TurboResult candidate=null;
+        for(PS5Client.TurboResult row:lastTurboResults)if(String.format(Locale.US,"0x%016X",row.address).equalsIgnoreCase(proposal.address)||("0x"+Long.toHexString(row.address)).equalsIgnoreCase(proposal.address)){candidate=row;break;}
+        if(candidate==null){toast("AI memory actions are limited to addresses on the currently loaded TurboScan page. Share the latest results again.");return;}
+        final long address=candidate.address;
+        final int length="read_memory".equals(proposal.type)?proposal.length:proposal.bytes.length;
+        if(length<1||length>256||length>candidate.current.length){toast("Requested memory length is outside the loaded candidate size.");return;}
+        if("write_memory".equals(proposal.type)&&length!=candidate.current.length){toast("Write length must exactly match the loaded candidate size.");return;}
+        if("read_memory".equals(proposal.type)){
+            new android.app.AlertDialog.Builder(this).setTitle("Approve AI memory read")
+                .setMessage(String.format(Locale.US,"Read %d byte(s) from candidate 0x%016X?\\n\\nRead-only. No memory will be changed.",length,address))
+                .setNegativeButton("CANCEL",null).setPositiveButton("READ MEMORY",(d,w)->runAsync("AI-approved read-only memory read",()->{
+                    byte[] bytes=client.read(currentPid(),address,length);
+                    return "AI memory read at 0x"+Long.toHexString(address).toUpperCase(Locale.US)+" ("+bytes.length+" bytes): "+toHex(bytes);
+                },result->{appendAiMessage("assistant",result);saveAiConversation();renderAiConversation();memoryResult.setText(result);}))
+                .show();
+            return;
+        }
+        new android.app.AlertDialog.Builder(this).setTitle("Review AI memory write")
+            .setMessage(String.format(Locale.US,"Read live bytes before preparing a write at 0x%016X…",address))
+            .setNegativeButton("CANCEL",null).setPositiveButton("READ + REVIEW",(d,w)->runAsync("Reading live bytes for AI write review",()->{
+                byte[] before=client.read(currentPid(),address,length);
+                return new AiWriteReview(address,before,proposal.bytes);
+            },review->{
+                String message="Address: 0x"+String.format(Locale.US,"%016X",review.address)
+                    +"\\nCurrent live bytes: "+toHex(review.before)
+                    +"\\nProposed bytes: "+toHex(review.after)
+                    +"\\n\\nThis changes PS5 process memory. Continue only if this is the intended value. The app will abort if the live bytes change before the write.";
+                new android.app.AlertDialog.Builder(this).setTitle("Confirm PS5 memory write")
+                    .setMessage(message).setNegativeButton("CANCEL",null)
+                    .setPositiveButton("WRITE + VERIFY",(d2,w2)->runAsync("Applying AI-approved memory write with rollback",()->{
+                        int p=currentPid();
+                        byte[] latest=client.read(p,review.address,review.before.length);
+                        if(!Arrays.equals(latest,review.before))throw new IOException("Memory changed after review. Write cancelled; share fresh scan results and retry.");
+                        try{
+                            client.write(p,review.address,review.after);
+                            byte[] actual=client.read(p,review.address,review.after.length);
+                            if(!Arrays.equals(actual,review.after))throw new IOException("Write read-back mismatch.");
+                            return "AI-approved write verified at 0x"+Long.toHexString(review.address).toUpperCase(Locale.US)+".\\nBefore: "+toHex(review.before)+"\\nAfter: "+toHex(actual);
+                        }catch(Exception failure){
+                            try{
+                                client.write(p,review.address,review.before);
+                                byte[] restored=client.read(p,review.address,review.before.length);
+                                if(!Arrays.equals(restored,review.before))throw new IOException("Rollback read-back mismatch.");
+                            }catch(Exception rollback){throw new IOException("Write failed and rollback could not be verified: "+rollback.getMessage(),failure);}
+                            throw new IOException("Write failed; original bytes restored and verified: "+failure.getMessage(),failure);
+                        }
+                    },result->{appendAiMessage("assistant",result);saveAiConversation();renderAiConversation();memoryResult.setText(result);}))
+                    .show();
+            }))
+            .show();
+    }
+
+    private static final class AiWriteReview{
+        final long address;final byte[] before,after;
+        AiWriteReview(long a,byte[] b,byte[] n){address=a;before=b.clone();after=n.clone();}
     }
 
     private void showAiScanApproval(AiActionProtocol.Proposal proposal){
