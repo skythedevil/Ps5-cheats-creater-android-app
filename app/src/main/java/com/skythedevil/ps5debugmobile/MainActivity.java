@@ -672,7 +672,9 @@ public class MainActivity extends Activity {
         "Ask the user to report the exact visible value after each gameplay action, then explain which TurboScan comparison and value type to use. " +
         "Prefer small, reversible experiments. Explain how to refine candidates using changed/unchanged/increased/decreased scans. " +
         "Do not recommend memory writes, freezes, hooks, or remote function calls until a candidate is supported by repeated observations; always ask the user to confirm before any write or activation. " +
-        "When uncertain, say so and request the next observation. Respond in the user's language, preferably concise Hinglish.";
+        "When uncertain, say so and request the next observation. Respond in the user's language, preferably concise Hinglish. " +
+        "When enough information exists for a read-only TurboScan, append one compact JSON object with keys explanation and action. action must contain type=turbo_scan, value_type (0-9 in app selector order), comparison (0-11 in app selector order), and value as a string. " +
+        "Never propose memory writes or freeze operations as executable actions. Only propose a scan after the user reports a concrete observed value and game action; otherwise ask for that observation.";
 
     private void loadAiConversation(){
         try{
