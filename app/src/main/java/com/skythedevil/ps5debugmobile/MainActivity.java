@@ -617,8 +617,32 @@ public class MainActivity extends Activity {
         section(page, "08A  AI CHEAT CREATOR", "Connect an AI provider once, then work through cheat discovery conversationally. The assistant can plan scans and interpret user-reported values; live screen capture and autonomous scan control are separate integrations.");
         aiStatusView=text(AiAssistant.isConfigured(this)?"AI CONFIGURED  •  API key stored encrypted on this device.":"AI NOT CONFIGURED  •  Save a provider endpoint, model and API key.",11,MUTED,true);
         page.addView(aiStatusView);
-        aiEndpointInput=field("OpenAI-compatible API base URL",AiAssistant.endpoint(this));page.addView(aiEndpointInput);
-        aiModelInput=field("Model name",AiAssistant.model(this));page.addView(aiModelInput);
+        TextView providerLabel=text("AI PROVIDER",10,MUTED,true);page.addView(providerLabel);
+        Spinner aiProviderSpinner=new Spinner(this);
+        String[] aiProviders={"OpenAI","OpenRouter","Custom OpenAI-compatible"};
+        aiProviderSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,aiProviders));
+        String savedEndpoint=AiAssistant.endpoint(this);
+        int savedProvider=savedEndpoint.toLowerCase(Locale.US).contains("openrouter.ai")?1:
+            (savedEndpoint.toLowerCase(Locale.US).contains("api.openai.com")?0:2);
+        aiProviderSpinner.setSelection(savedProvider);page.addView(aiProviderSpinner);
+        aiEndpointInput=field("API base URL",AiAssistant.endpoint(this));page.addView(aiEndpointInput);
+        aiModelInput=field("Model name (OpenRouter: provider/model)",AiAssistant.model(this));page.addView(aiModelInput);
+        aiProviderSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
+            private int lastSelection=savedProvider;
+            @Override public void onNothingSelected(AdapterView<?> parent){}
+            @Override public void onItemSelected(AdapterView<?> parent,View view,int position,long id){
+                if(position==lastSelection)return;
+                lastSelection=position;
+                if(position==0){
+                    aiEndpointInput.setText("https://api.openai.com/v1");
+                    aiModelInput.setText("gpt-4o-mini");
+                }else if(position==1){
+                    aiEndpointInput.setText("https://openrouter.ai/api/v1");
+                    aiModelInput.setText("openai/gpt-4o-mini");
+                }
+                // Custom preserves the current endpoint and model for manual editing.
+            }
+        });
         aiKeyInput=field("API key (blank keeps the saved key)","");
         aiKeyInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
         page.addView(aiKeyInput);
