@@ -1028,9 +1028,28 @@ public class MainActivity extends Activity {
                     if(aiAssistedMode)new android.app.AlertDialog.Builder(this).setTitle("Cheat added to this game file")
                         .setMessage("Do you want to add another cheat to the same file, or finish and export?")
                         .setNegativeButton("FINISH & EXPORT",(dialog,which)->showAiExportChoices())
-                        .setPositiveButton("ADD ANOTHER CHEAT",(dialog,which)->sendAiText("The previous cheat has been added to the same game file. I want to create another cheat for "+aiGameTitle+". Ask me which new cheat I want, then guide the next search and append the approved cheat to this same file."))
+                        .setPositiveButton("ADD ANOTHER CHEAT",(dialog,which)->beginAnotherAiCheat())
                         .show();
                 }catch(Exception e){toast("AI draft rejected: "+e.getMessage());}
+            }).show();
+    }
+
+    private void beginAnotherAiCheat(){
+        EditText goal=field("What new cheat do you want?",""); 
+        new android.app.AlertDialog.Builder(this).setTitle("Add another cheat")
+            .setMessage("This new cheat will be added to the existing "+aiGameTitle+" file.")
+            .setView(goal).setNegativeButton("CANCEL",null).setPositiveButton("CONTINUE",(d,w)->{
+                String nextGoal=goal.getText().toString().trim();
+                if(nextGoal.isEmpty()){toast("Enter the new cheat you want.");return;}
+                aiGameGoal=nextGoal;
+                Runnable start=()->{
+                    aiMessages=new JSONArray();appendAiMessage("system",AI_SYSTEM_PROMPT);saveAiConversation();renderAiConversation();
+                    aiBaselinePending=true;
+                    sendAiText("Start a separate search for this additional cheat: "+aiGameGoal+". Game: "+aiGameTitle+". Keep all previously approved cheats in the existing game file. The same game process is selected. Explain that I should tap START AI SEARCH to begin a fresh baseline, then guide me through controlled observations. Choose scan settings yourself. Never reuse prior cheat candidate addresses as proof for this new cheat.");
+                };
+                if(turboActive&&scanClient!=null){
+                    runAsync("Ending previous cheat scan session",()->{scanClient.turboEnd();turboActive=false;return "Previous scan session ended.";},result->start.run());
+                }else{turboActive=false;start.run();}
             }).show();
     }
 
