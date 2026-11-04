@@ -215,7 +215,7 @@ public class MainActivity extends Activity {
         page.addView(text(AiAssistant.isConfigured(this)?"AI settings saved on this device. The assistant will guide the search step by step.":"AI is not connected yet. You can set it up when you choose this option.",12,MUTED,false));
         Button settings=button("AI SETTINGS",PANEL);page.addView(settings);
         Button tools=button("ADVANCED PS5 TOOLS",PANEL);page.addView(tools);
-        simple.setOnClickListener(v->{aiAssistedMode=false;buildFullUi();});
+        simple.setOnClickListener(v->{aiAssistedMode=false;buildSimpleSearchUi();});
         tools.setOnClickListener(v->{aiAssistedMode=false;buildFullUi();});
         assisted.setOnClickListener(v->{if(!AiAssistant.isConfigured(this)){showAiSetupScreen(false);return;}startAiAssistedWizard();});
         settings.setOnClickListener(v->showAiSetupScreen(false));
@@ -235,6 +235,59 @@ public class MainActivity extends Activity {
                 aiMessages=new JSONArray();appendAiMessage("system",AI_SYSTEM_PROMPT);saveAiConversation();renderAiConversation();
                 sendAiText("Start a guided cheat research session. Game: "+aiGameTitle+". Title ID: "+(aiGameTitleId.isEmpty()?"unknown":aiGameTitleId)+". Desired cheat: "+aiGameGoal+". First help me connect to the PS5 and select the correct running game process. Once connected, select the actual game process and tap START AI SEARCH; the app will take an unknown-value baseline scan. After every scan, ask me to change the target game value and tell you the exact visible value or attach a screenshot. Choose the value type and TurboScan comparison settings yourself based on my observations and actual scan results. Never invent memory addresses. Continue refining until there is strong repeatable evidence. Only propose cheat bytes when supported by real evidence; ask before writing or applying anything. Keep adding approved cheats to this same game file. When I say finish, help export a compatible GoldHEN JSON file.");
             }).show();
+    }
+
+    private void buildSimpleSearchUi(){
+        ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);
+        LinearLayout page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);page.setPadding(dp(18),dp(20),dp(18),dp(28));page.setBackgroundColor(BG);scroll.addView(page);setContentView(scroll);
+        Button home=button("← HOME",PANEL);page.addView(home);home.setOnClickListener(v->showHomeScreen());
+        page.addView(text("SIMPLE SEARCH",23,TEXT,true));
+        page.addView(text("Connect your PS5, select the game process, search a value and refine the results.",12,MUTED,false));
+        section(page,"1  PS5 CONNECTION","Phone and PS5 must be on the same network.");
+        host=field("PS5 IP address","192.168.1.100");port=field("Command port","744");page.addView(host);page.addView(port);
+        connectButton=button("CONNECT TO PS5",ACCENT);page.addView(connectButton);
+        Button discover=button("FIND PS5 ON NETWORK",PANEL);page.addView(discover);
+        connectionStatus=text("● DISCONNECTED",12,MUTED,true);page.addView(connectionStatus);
+        connectButton.setOnClickListener(v->connectOrDisconnect());discover.setOnClickListener(v->discoverConsole());
+        section(page,"2  GAME PROCESS","Connect, refresh the list and select the game you are playing.");
+        processSpinner=new Spinner(this);processSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Connect first"}));page.addView(processSpinner);
+        pid=field("Selected process ID","");page.addView(pid);
+        Button refresh=button("REFRESH GAME PROCESSES",PANEL);page.addView(refresh);refresh.setOnClickListener(v->refreshProcesses());
+        processSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
+            @Override public void onItemSelected(AdapterView<?> parent,View view,int pos,long id){if(pos>=0&&pos<processes.size()){selectedPid=processes.get(pos).pid;pid.setText(String.valueOf(selectedPid));}}
+            @Override public void onNothingSelected(AdapterView<?> parent){}
+        });
+        section(page,"3  VALUE SEARCH","Enter the value currently visible in the game. Change it in-game, then run Next Scan.");
+        scanAddress=field("Start address (leave 0x0)","0x0");scanLength=field("Scan range (bytes)","1048576");page.addView(scanAddress);page.addView(scanLength);
+        turboType=new Spinner(this);String[] types={"Byte (unsigned)","Byte (signed)","2 bytes (unsigned)","2 bytes (signed)","4 bytes (unsigned)","4 bytes (signed)","8 bytes (unsigned)","8 bytes (signed)","Float","Double"};
+        turboType.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,types));turboType.setSelection(4);page.addView(turboType);
+        turboCompare=new Spinner(this);String[] compares={"Exact value","Fuzzy (±1)","Bigger than","Smaller than","Between low/high","Increased","Increased by","Decreased","Decreased by","Changed","Unchanged","Unknown initial value"};
+        turboCompare.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,compares));page.addView(turboCompare);
+        turboValue=field("Current game value (e.g. 100)","100");page.addView(turboValue);
+        turboStartAddress=field("Memory start (optional)","");turboStopAddress=field("Memory end (optional)","");page.addView(turboStartAddress);page.addView(turboStopAddress);
+        turboWritableOnly=new CheckBox(this);turboWritableOnly.setText("Writable memory only");turboWritableOnly.setTextColor(TEXT);turboWritableOnly.setChecked(true);page.addView(turboWritableOnly);
+        turboIncludeExec=new CheckBox(this);turboIncludeExec.setText("Include executable memory");turboIncludeExec.setTextColor(TEXT);page.addView(turboIncludeExec);
+        turboSkipSlow=new CheckBox(this);turboSkipSlow.setText("Skip slow memory regions");turboSkipSlow.setTextColor(TEXT);turboSkipSlow.setChecked(true);page.addView(turboSkipSlow);
+        turboFastAlignment=new CheckBox(this);turboFastAlignment.setText("Fast aligned scan");turboFastAlignment.setTextColor(TEXT);turboFastAlignment.setChecked(true);page.addView(turboFastAlignment);
+        turboAlignment=field("Alignment","4");page.addView(turboAlignment);
+        turboResultStart=field("Result page start","0");turboResultCount=field("Results per page (max 500)","100");page.addView(turboResultStart);page.addView(turboResultCount);
+        Button first=button("FIRST SCAN",ACCENT),next=button("NEXT SCAN",PANEL),load=button("LOAD RESULTS",PANEL);
+        page.addView(first);page.addView(next);page.addView(load);
+        turboResult=text("No scan yet.",11,MUTED,false);turboResult.setTypeface(Typeface.MONOSPACE);page.addView(turboResult);
+        turboRows=new LinearLayout(this);turboRows.setOrientation(LinearLayout.VERTICAL);page.addView(turboRows);
+        first.setOnClickListener(v->turboFirstScan());next.setOnClickListener(v->turboNextScan());load.setOnClickListener(v->turboLoadResults());
+        section(page,"4  SAVE YOUR CHEAT","Create a game file and add verified patch bytes. Export GoldHEN JSON for supported fixed hex patches.");
+        gameName=field("Game name","");titleId=field("Title ID (optional)","");gameVersion=field("Game version (optional)","");
+        cheatName=field("Cheat name","Infinite Health");cheatAddress=field("Patch address","module(eboot.bin)+0x0");cheatBytes=field("Patch bytes (hex)","90 90 90 90");
+        page.addView(gameName);page.addView(titleId);page.addView(gameVersion);
+        Button create=button("CREATE / UPDATE GAME FILE",PANEL);page.addView(create);create.setOnClickListener(v->createGameFile());
+        page.addView(cheatName);page.addView(cheatAddress);page.addView(cheatBytes);
+        Button add=button("ADD CHEAT TO FILE",ACCENT),export=button("EXPORT GOLDHEN JSON",PANEL),exportNative=button("EXPORT NATIVE JSON",PANEL);
+        page.addView(add);page.addView(export);page.addView(exportNative);
+        cheatStatus=text("No game file loaded.",11,MUTED,false);page.addView(cheatStatus);
+        cheatList=new LinearLayout(this);cheatList.setOrientation(LinearLayout.VERTICAL);page.addView(cheatList);
+        add.setOnClickListener(v->addPatchCheat());export.setOnClickListener(v->exportGoldHenJson());exportNative.setOnClickListener(v->exportJson());
+        if(gameFile!=null){gameName.setText(gameFile.optString("game",""));titleId.setText(gameFile.optString("title_id",""));gameVersion.setText(gameFile.optString("version",""));refreshCheatList();}
     }
 
     private void buildFullUi() {
