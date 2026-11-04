@@ -1,63 +1,33 @@
 # In-app AI Cheat Creator
 
-## Initial integration
+## Provider setup and saved key
 
-The Android app now includes a persistent conversational AI workspace.
+- Configure OpenAI, OpenRouter, or a custom OpenAI-compatible endpoint.
+- API key is encrypted with AES-GCM using Android Keystore; leave the key field blank to retain the saved key.
+- Provider endpoint/model and chat history persist locally. Disconnect AI removes the stored configuration and Keystore key.
+- OpenRouter requests include HTTP-Referer and X-Title headers.
+- Image analysis requires a model that accepts image input. The OpenRouter preset uses `openai/gpt-4o-mini`; model availability and billing depend on the user's provider account.
 
-- Configure an OpenAI-compatible API base URL, model name and API key once.
-- The API key is encrypted with AES-GCM using a key held in Android Keystore. The plaintext key is not written to app preferences or source code.
-- Leave the API-key field blank when changing the endpoint/model to retain the previously saved key.
-- The provider settings and chat history are stored locally on the device.
-- The connection test sends a minimal chat-completions request.
-- Disconnect AI clears the saved provider settings and Keystore key.
+## PS5 screen image analysis
 
-Default provider values are OpenAI-compatible:
-- Base URL: https://api.openai.com/v1
-- Model: gpt-4o-mini
+The AI section has an **ANALYZE PS5 SCREENSHOT WITH AI** action. It opens Android's image picker, downsamples the selected image to a maximum 1280-pixel edge, JPEG-compresses it, and sends it as a multimodal chat-completions message. The AI is instructed to read only visible gameplay values (such as health, ammo, money, coordinates and timers), report uncertainty, and use those observations to suggest a controlled scan. The image itself is not persisted in chat history; the textual conversation is saved locally.
 
-Provider dropdown presets:
-- OpenAI: https://api.openai.com/v1, model gpt-4o-mini.
-- OpenRouter: https://openrouter.ai/api/v1, model openai/gpt-4o-mini (editable; choose any model enabled for your OpenRouter account).
-- Custom OpenAI-compatible: keeps the current endpoint and model so you can enter another compatible provider manually.
+This is screenshot-based vision, not continuous live capture. To capture a TV/monitor feed, the phone needs a compatible HDMI-to-USB UVC capture device and app-side UVC camera integration. Live UVC streaming, automatic frame sampling and video analysis are still pending. Android screen recording/MediaProjection cannot see a separate TV's HDMI output.
 
-OpenRouter requests include HTTP-Referer and X-Title identification headers. The API key field accepts the OpenRouter key and is stored encrypted locally. Model availability, pricing and account credits are controlled by OpenRouter; check your OpenRouter account before use.
+## Controlled AI cheat workflow
 
-## Current interaction
+- AI can propose a first or next TurboScan; the app previews the type/comparison/value and requires the user to approve before running a read-only scan.
+- The user can share up to 40 currently loaded TurboScan candidates (addresses and current/previous bytes) with AI.
+- The user can approve read-only memory reads restricted to addresses and lengths in the currently loaded TurboScan results page.
+- The user can approve a memory write only for a loaded candidate and explicit replacement bytes supplied in the conversation. The app reads live bytes, previews before/after, requires a second explicit approval, rechecks the original bytes, writes once, verifies read-back and attempts rollback if the write fails.
+- The **VERIFY LOADED CANDIDATES (READ ONLY)** action compares up to 40 candidate snapshots against live process memory. A byte match only proves the snapshot still matches; it does not prove the address controls a particular game mechanic. Repeat controlled gameplay changes and scans before trusting a candidate.
+- AI can propose a fixed-address hex cheat draft only from supplied/observed addresses and bytes. The app validates 1–32 patch steps (up to 4096 bytes each), previews the draft, and requires approval to save it disabled in the local game library. Saving a draft does not write to PS5 memory or prove the cheat effect.
+- Existing cheat apply/restore paths use read-back verification and rollback attempts. Actual in-game effect still requires manual console/gameplay validation.
 
-The assistant receives basic app context (connection state, selected PID and available TurboScan comparison modes). It can walk the user through a controlled experiment: record a visible value, perform a game action, report the changed value, refine the scan, and validate candidate addresses. Its system instructions explicitly prohibit inventing screen observations, addresses or successful tests.
+## Safety and limitations
 
-## Not yet implemented
-
-This first integration is not yet the fully autonomous agent described in the product plan. It does not:
-- capture or stream the PS5 screen to a vision model;
-- call TurboScan or Memory Editor as AI tools;
-- execute an AI-proposed scan/write/freeze without a dedicated approval workflow;
-- autonomously verify candidate addresses or generate a validated cheat file.
-
-Those require a structured tool-call layer over the existing scanner/editor, a persistent experiment state machine, explicit user approval for writes, and a supported PS5 video-capture path. Do not describe those capabilities as available until implemented and tested.
-
-## Security and operational notes
-
-- Never commit API keys into GitHub or logs.
-- API calls require internet access and may incur provider charges.
-- The API key is encrypted at rest on the device; removing app data or uninstalling the app may remove access to the saved key.
-- AI output is untrusted advice. Treat candidate addresses as unverified until repeated memory observations support them.
-
-
-## Approved scanner actions
-
-AI may return a structured action with its explanation:
-
-```json
-{
-  "explanation": "Track the visible value and refine after changing it.",
-  "action": {"type":"turbo_scan","value_type":4,"comparison":0,"value":"100"}
-}
-```
-
-The app validates selector indices, previews exact scan settings, and waits for an explicit approval tap. This workflow only starts/refines a read-only TurboScan. AI cannot directly write memory, freeze values, install hooks or call remote functions.
-
-
-## AI-generated cheat drafts
-
-When the user supplies real candidate addresses and patch bytes, the assistant can propose a `create_cheat` JSON action. The app accepts only fixed-address hex patch steps (1–32 steps, max 4096 bytes each), validates addresses and byte pairs, previews the draft, and requires approval to save it disabled in the local game library. Saving never writes to PS5 memory; the user must separately review and apply it. The assistant must not invent addresses or bytes. This is limited to fixed-address PS5Debug patch cheats, not a universal cross-platform cheat format.
+- AI cannot infer memory addresses from pixels. Screen observations and memory candidates are separate evidence.
+- No arbitrary shell commands, arbitrary remote payloads, or AI-generated code are executed.
+- Memory writes, cheat application and activation remain user-controlled.
+- Never commit API keys into GitHub or logs. API requests require internet and may incur provider charges.
+- Physical PS5 protocol/device testing and end-to-end cheat-effect verification remain necessary before calling any cheat verified.
