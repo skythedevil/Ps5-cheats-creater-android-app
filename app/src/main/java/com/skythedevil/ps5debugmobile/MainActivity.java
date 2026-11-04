@@ -641,6 +641,8 @@ public class MainActivity extends Activity {
         aiScanRow.addView(aiShareResults,new LinearLayout.LayoutParams(0,dp(48),1));page.addView(aiScanRow);
         aiRunScan.setOnClickListener(v->runAiApprovedTurboScan());
         aiShareResults.setOnClickListener(v->shareTurboResultsWithAi());
+        Button aiVerifyCandidates=button("VERIFY LOADED CANDIDATES (READ ONLY)",PANEL);page.addView(aiVerifyCandidates);
+        aiVerifyCandidates.setOnClickListener(v->verifyTurboCandidatesForAi());
         Button aiReset=button("CLEAR CONVERSATION",PANEL);page.addView(aiReset);
         loadAiConversation();
         aiSaveButton.setOnClickListener(v->saveAiSettingsAndTest());
@@ -888,6 +890,46 @@ public class MainActivity extends Activity {
                 if(refining)turboNextScan();else turboFirstScan();
             }).show();
     }
+    private void verifyTurboCandidatesForAi(){
+        if(!connected||client==null){toast("Connect to the PS5 first.");return;}
+        if(lastTurboResults.isEmpty()){toast("Load a TurboScan results page first.");return;}
+        final List<PS5Client.TurboResult> snapshot=new ArrayList<>(lastTurboResults);
+        final int limit=Math.min(snapshot.size(),40);
+        new android.app.AlertDialog.Builder(this).setTitle("Verify loaded candidates?")
+            .setMessage("Read live memory for "+limit+" loaded candidate(s) and compare it with the last TurboScan values.\\n\\nRead-only: no memory will be changed. This checks whether values still match; it does not prove which game mechanic they control.")
+            .setNegativeButton("CANCEL",null).setPositiveButton("VERIFY READ-ONLY",(d,w)->runAsync("Verifying loaded TurboScan candidates",()->{
+                int pid=currentPid(),same=0,changed=0,failed=0;
+                StringBuilder report=new StringBuilder("READ-ONLY CANDIDATE VERIFICATION\\n")
+                    .append("PID: ").append(pid).append(" | candidates: ").append(limit).append("\\n")
+                    .append("Address | scan bytes | live bytes | status\\n");
+                for(int i=0;i<limit;i++){
+                    PS5Client.TurboResult item=snapshot.get(i);
+                    String address=String.format(Locale.US,"0x%016X",item.address);
+                    try{
+                        byte[] live=client.read(pid,item.address,item.current.length);
+                        boolean match=Arrays.equals(live,item.current);
+                        if(match)same++;else changed++;
+                        report.append(address).append(" | ").append(toHex(item.current)).append(" | ").append(toHex(live))
+                            .append(" | ").append(match?"MATCH":"CHANGED").append("\\n");
+                        item.current=live;
+                    }catch(Exception ex){
+                        failed++;
+                        report.append(address).append(" | ").append(toHex(item.current)).append(" | — | READ ERROR: ")
+                            .append(ex.getMessage()==null?"unknown":ex.getMessage()).append("\\n");
+                    }
+                }
+                report.append("\\nSummary: ").append(same).append(" match, ").append(changed).append(" changed, ").append(failed).append(" read errors.")
+                    .append("\\nInterpretation: a match only means the bytes still equal the scan snapshot. Repeat controlled in-game changes before treating any address as a cheat candidate.");
+                return report.toString();
+            },report->{
+                turboResult.setText(report);renderTurboRows();
+                appendAiMessage("user","Please analyse this actual read-only live verification report. Explain which candidates need another controlled scan. Do not call a matching value verified as a cheat address.\\n\\n"+report);
+                saveAiConversation();renderAiConversation();
+                aiPromptInput.setText("Analyse the latest read-only candidate verification report and tell me the next safe in-game experiment.");
+                toast("Candidate verification complete. Report ready to share with AI.");
+            })).show();
+    }
+
     private void shareTurboResultsWithAi(){
         if(!AiAssistant.isConfigured(this)){toast("Configure AI first.");return;}
         if(lastTurboResults.isEmpty()){toast("Load a TurboScan results page first.");return;}
