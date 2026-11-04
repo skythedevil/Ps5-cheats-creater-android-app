@@ -15,7 +15,12 @@ Default provider values are OpenAI-compatible:
 - Base URL: https://api.openai.com/v1
 - Model: gpt-4o-mini
 
-A compatible provider may be used by changing the base URL and model.
+Provider dropdown presets:
+- OpenAI: https://api.openai.com/v1, model gpt-4o-mini.
+- OpenRouter: https://openrouter.ai/api/v1, model openai/gpt-4o-mini (editable; choose any model enabled for your OpenRouter account).
+- Custom OpenAI-compatible: keeps the current endpoint and model so you can enter another compatible provider manually.
+
+OpenRouter requests include HTTP-Referer and X-Title identification headers. The API key field accepts the OpenRouter key and is stored encrypted locally. Model availability, pricing and account credits are controlled by OpenRouter; check your OpenRouter account before use.
 
 ## Current interaction
 
