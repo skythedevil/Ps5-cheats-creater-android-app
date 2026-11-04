@@ -48,6 +48,8 @@ public class MainActivity extends Activity {
     private static final int REQ_EXPORT_HEX_PAGE = 28;
     private static final int REQ_IMPORT_HEX_PATCH = 29;
     private static final int REQ_AI_SCREENSHOT = 30;
+    private boolean aiAssistedMode=false, aiBaselinePending=false;
+    private String aiGameGoal="", aiGameTitle="", aiGameTitleId="";
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -142,12 +144,100 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
         getWindow().getDecorView().setSystemUiVisibility(0);
-        buildUi();
         restoreStoredGameFile();
+        buildUi();
         log("Mobile companion v1.0 ready. PS5 and phone must be on the same reachable network.");
     }
 
     private void buildUi() {
+        boolean decided=getSharedPreferences("startup",0).getBoolean("ai_integration_decided",false);
+        if(!decided && !AiAssistant.isConfigured(this)){showIntegrationChoice();return;}
+        if(AiAssistant.isConfigured(this))getSharedPreferences("startup",0).edit().putBoolean("ai_integration_decided",true).apply();
+        showHomeScreen();
+    }
+
+    private LinearLayout newPage(String heading,String subheading){
+        ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);
+        LinearLayout page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(dp(22),dp(28),dp(22),dp(30));page.setBackgroundColor(BG);scroll.addView(page);setContentView(scroll);
+        TextView title=text(heading,25,TEXT,true);page.addView(title);
+        TextView subtitle=text(subheading,13,MUTED,false);subtitle.setPadding(0,dp(6),0,dp(22));page.addView(subtitle);
+        return page;
+    }
+
+    private void showIntegrationChoice(){
+        LinearLayout page=newPage("PS5 DEBUG STUDIO","Let's set up your preferred way to create game cheats.");
+        page.addView(text("Do you want AI integration?",20,TEXT,true));
+        TextView note=text("AI can guide memory searches, analyse the values you report, and help build cheat files. You can also use manual search without AI.",14,MUTED,false);
+        note.setPadding(0,dp(10),0,dp(24));page.addView(note);
+        Button yes=button("YES, SET UP AI",ACCENT),no=button("NO, CONTINUE WITHOUT AI",PANEL);page.addView(yes);page.addView(no);
+        yes.setOnClickListener(v->showAiSetupScreen(true));
+        no.setOnClickListener(v->{getSharedPreferences("startup",0).edit().putBoolean("ai_integration_decided",true).putBoolean("ai_enabled",false).apply();showHomeScreen();});
+    }
+
+    private void showAiSetupScreen(boolean firstRun){
+        LinearLayout page=newPage("AI INTEGRATION","These settings are saved on this device. You won't be asked again on the next launch.");
+        Spinner provider=new Spinner(this);String[] providers={"OpenAI","OpenRouter","Custom OpenAI-compatible"};
+        provider.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,providers));
+        String saved=AiAssistant.endpoint(this);int selected=saved.contains("openrouter.ai")?1:saved.contains("api.openai.com")?0:2;provider.setSelection(selected);page.addView(provider);
+        EditText endpoint=field("API base URL",AiAssistant.endpoint(this));page.addView(endpoint);
+        EditText model=field("Model name",AiAssistant.model(this));page.addView(model);
+        EditText key=field(AiAssistant.isConfigured(this)?"API key (blank keeps saved key)":"API key","");key.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);page.addView(key);
+        provider.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){int last=selected;
+            @Override public void onNothingSelected(AdapterView<?> p){}
+            @Override public void onItemSelected(AdapterView<?> p,View v,int pos,long id){if(pos==last)return;last=pos;
+                if(pos==0){endpoint.setText("https://api.openai.com/v1");model.setText("gpt-4o-mini");}
+                else if(pos==1){endpoint.setText("https://openrouter.ai/api/v1");model.setText("openai/gpt-4o-mini");}
+            }});
+        TextView status=text("API key is encrypted using Android Keystore.",11,MUTED,false);page.addView(status);
+        Button save=button("SAVE SETTINGS & TEST CONNECTION",ACCENT);page.addView(save);
+        Button skip=button(firstRun?"CONTINUE WITHOUT AI":"BACK TO HOME",PANEL);page.addView(skip);
+        save.setOnClickListener(v->{
+            try{
+                if(!AiAssistant.isConfigured(this)&&key.getText().toString().trim().isEmpty())throw new IllegalArgumentException("Enter an API key.");
+                AiAssistant.saveConfig(this,endpoint.getText().toString(),model.getText().toString(),key.getText().toString());
+                key.setText("");status.setText("Saved securely. Testing AI connection…");save.setEnabled(false);
+                aiWorker.execute(()->{try{
+                    JSONArray test=new JSONArray().put(new JSONObject().put("role","user").put("content","Reply only: PS5 Debug Studio connected."));
+                    AiAssistant.chat(this,test);
+                    main.post(()->{getSharedPreferences("startup",0).edit().putBoolean("ai_integration_decided",true).putBoolean("ai_enabled",true).apply();toast("AI connected. Settings saved for future launches.");showHomeScreen();});
+                }catch(Exception e){main.post(()->{save.setEnabled(true);status.setText("Settings saved, but test failed: "+e.getMessage());getSharedPreferences("startup",0).edit().putBoolean("ai_integration_decided",true).putBoolean("ai_enabled",true).apply();});}});
+            }catch(Exception e){toast("Could not save AI settings: "+e.getMessage());}
+        });
+        skip.setOnClickListener(v->{if(firstRun)getSharedPreferences("startup",0).edit().putBoolean("ai_integration_decided",true).putBoolean("ai_enabled",false).apply();showHomeScreen();});
+    }
+
+    private void showHomeScreen(){
+        LinearLayout page=newPage("PS5 DEBUG STUDIO","Choose how you want to find and create your game cheats.");
+        Button simple=button("SIMPLE SEARCH",ACCENT);page.addView(simple);
+        page.addView(text("Search game values yourself, refine results and create a cheat file.",12,MUTED,false));
+        Button assisted=button("AI-ASSISTED SEARCH",GREEN);page.addView(assisted);
+        page.addView(text(AiAssistant.isConfigured(this)?"AI settings saved on this device. The assistant will guide the search step by step.":"AI is not connected yet. You can set it up when you choose this option.",12,MUTED,false));
+        Button settings=button("AI SETTINGS",PANEL);page.addView(settings);
+        Button tools=button("ADVANCED PS5 TOOLS",PANEL);page.addView(tools);
+        simple.setOnClickListener(v->{aiAssistedMode=false;buildFullUi();});
+        tools.setOnClickListener(v->{aiAssistedMode=false;buildFullUi();});
+        assisted.setOnClickListener(v->{if(!AiAssistant.isConfigured(this)){showAiSetupScreen(false);return;}startAiAssistedWizard();});
+        settings.setOnClickListener(v->showAiSetupScreen(false));
+    }
+
+    private void startAiAssistedWizard(){
+        LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);
+        EditText game=field("Game name (e.g. GTA V)","");form.addView(game);
+        EditText title=field("Title ID (optional, e.g. PPSAxxxxx)","");form.addView(title);
+        EditText goal=field("What cheat do you want? (e.g. infinite health)","");form.addView(goal);
+        new android.app.AlertDialog.Builder(this).setTitle("Start AI-assisted cheat search").setMessage("First tell AI which game you are playing and the cheat you want.").setView(form)
+            .setNegativeButton("CANCEL",null).setPositiveButton("START",(d,w)->{
+                aiGameTitle=game.getText().toString().trim();aiGameTitleId=title.getText().toString().trim();aiGameGoal=goal.getText().toString().trim();
+                if(aiGameTitle.isEmpty()||aiGameGoal.isEmpty()){toast("Enter the game name and the cheat you want.");return;}
+                aiAssistedMode=true;aiBaselinePending=true;aiMessages=new JSONArray();saveAiConversation();
+                buildFullUi();gameName.setText(aiGameTitle);titleId.setText(aiGameTitleId);gameVersion.setText("");createGameFile();
+                appendAiMessage("system",AI_SYSTEM_PROMPT);
+                sendAiText("Start a guided cheat research session. Game: "+aiGameTitle+". Title ID: "+(aiGameTitleId.isEmpty()?"unknown":aiGameTitleId)+". Desired cheat: "+aiGameGoal+". First help me connect to the PS5 and select the correct running game process. Once connected, the app will take an unknown-value baseline scan. After every scan, ask me to change the target game value and tell you the exact visible value or attach a screenshot. Choose the value type and TurboScan comparison settings yourself based on my observations and actual scan results. Never invent memory addresses. Continue refining until there is strong repeatable evidence. Only propose cheat bytes when supported by real evidence; ask before writing or applying anything. Keep adding approved cheats to this same game file. When I say finish, help export a compatible GoldHEN JSON file.");
+            }).show();
+    }
+
+    private void buildFullUi() {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         LinearLayout page = new LinearLayout(this);
@@ -157,6 +247,7 @@ public class MainActivity extends Activity {
         scroll.addView(page);
         setContentView(scroll);
 
+        Button homeButton=button("← HOME",PANEL);page.addView(homeButton);homeButton.setOnClickListener(v->showHomeScreen());
         TextView title = text("PS5 DEBUG STUDIO", 23, TEXT, true);
         page.addView(title);
         TextView subtitle = text("MOBILE COMPANION  •  V1.0", 12, MUTED, true);
@@ -662,8 +753,8 @@ public class MainActivity extends Activity {
         aiPromptInput.setSingleLine(false);aiPromptInput.setMinLines(2);aiPromptInput.setGravity(Gravity.TOP|Gravity.START);
         page.addView(aiPromptInput,new LinearLayout.LayoutParams(-1,dp(84)));
         aiSendButton=button("SEND TO AI ASSISTANT",ACCENT);page.addView(aiSendButton);
-        Button aiScreenButton=button("ANALYZE PS5 SCREENSHOT WITH AI",PANEL);page.addView(aiScreenButton);
-        TextView aiVisionNote=text("Choose a PS5 screenshot/image. For live automatic TV capture, connect a compatible USB HDMI UVC capture card; live UVC streaming is not yet integrated.",10,MUTED,false);page.addView(aiVisionNote);
+        Button aiScreenButton=button("ATTACH GAME SCREENSHOT",PANEL);page.addView(aiScreenButton);
+        TextView aiVisionNote=text("Attach a screenshot when AI asks for the visible game value, or type the value in the chat.",10,MUTED,false);page.addView(aiVisionNote);
         aiScreenButton.setOnClickListener(v->pickAiScreenImage());
         LinearLayout aiScanRow=new LinearLayout(this);aiScanRow.setOrientation(LinearLayout.HORIZONTAL);
         Button aiRunScan=button("AI-APPROVED SCAN",PANEL),aiShareResults=button("SHARE RESULTS WITH AI",PANEL);
@@ -705,6 +796,8 @@ public class MainActivity extends Activity {
         "Prefer small, reversible experiments. Explain how to refine candidates using changed/unchanged/increased/decreased scans. " +
         "Do not recommend memory writes, freezes, hooks, or remote function calls until a candidate is supported by repeated observations; always ask the user to confirm before any write or activation. " +
         "When an image is attached, inspect only visible gameplay information such as health, ammo, money, coordinates, timers and on-screen labels; transcribe exact values, identify uncertainty, and never infer hidden memory addresses from pixels. Use the observed value to guide the next controlled scan. " +
+        "When uncertain, ask the user for the exact next visible value or a screenshot. In AI-assisted mode, the app can automatically run read-only TurboScan actions, but must ask for confirmation before any memory write or cheat activation. " +
+        "After each scan ask the user to perform one controlled in-game action and report the new visible value. Do not ask the user to choose scan types or comparisons; choose them from the observation and actual scan history. " +
         "When uncertain, say so and request the next observation. Respond in the user's language, preferably concise Hinglish. " +
         "When enough information exists for a read-only TurboScan, append one compact JSON object with keys explanation and action. action must contain type=turbo_scan, value_type (0-9 in app selector order), comparison (0-11 in app selector order), and value as a string. " +
         "Only propose a scan after the user reports a concrete observed value and game action; otherwise ask for that observation. " +
@@ -820,7 +913,7 @@ public class MainActivity extends Activity {
             showAiCheatDraftApproval(cheatDraft);
         }else if(proposal!=null){
             appendAiMessage("assistant",proposal.explanation+"\\n\\nPROPOSED APP ACTION: "+proposal.summary());
-            showAiScanApproval(proposal);
+            if(aiAssistedMode)runAiScanProposal(proposal);else showAiScanApproval(proposal);
         }else appendAiMessage("assistant",answer);
         while(aiMessages.length()>41)aiMessages.remove(1);
         saveAiConversation();renderAiConversation();aiSendButton.setEnabled(true);
@@ -936,6 +1029,23 @@ public class MainActivity extends Activity {
     private static final class AiWriteReview{
         final long address;final byte[] before,after;
         AiWriteReview(long a,byte[] b,byte[] n){address=a;before=b.clone();after=n.clone();}
+    }
+
+    private void runAiScanProposal(AiActionProtocol.Proposal proposal){
+        if(!connected){toast("Connect to the PS5 before scanning.");return;}
+        if(proposal.valueType<0||proposal.valueType>=turboType.getCount()||proposal.compare<0||proposal.compare>=turboCompare.getCount()){toast("AI proposed unsupported scan settings.");return;}
+        if(turboActive&&proposal.valueType!=turboValueType){toast("AI cannot change value type during an active scan. Restart the AI search.");return;}
+        turboType.setSelection(proposal.valueType);turboCompare.setSelection(proposal.compare);turboValue.setText(proposal.value);
+        if(turboActive&&scanClient!=null)turboNextScan();else turboFirstScan();
+    }
+
+    private void sendAiText(String prompt){if(aiPromptInput==null)return;aiPromptInput.setText(prompt);sendAiMessage();}
+
+    private void startAiBaselineScan(){
+        if(!aiAssistedMode||!connected||!aiBaselinePending||turboType==null)return;
+        aiBaselinePending=false;turboType.setSelection(4);turboCompare.setSelection(11);turboValue.setText("");
+        turboAlignment.setText("4");turboWritableOnly.setChecked(true);turboIncludeExec.setChecked(false);turboSkipSlow.setChecked(true);turboFastAlignment.setChecked(true);
+        turboFirstScan();
     }
 
     private void showAiScanApproval(AiActionProtocol.Proposal proposal){
@@ -1269,6 +1379,7 @@ public class MainActivity extends Activity {
                 pid.setText(String.valueOf(selectedPid));
             }
             log("Loaded " + processes.size() + " process(es).");
+            if(aiAssistedMode&&aiBaselinePending&&!processes.isEmpty())startAiBaselineScan();
         });
     }
 
@@ -2189,7 +2300,7 @@ public class MainActivity extends Activity {
             turboActive=true; turboValueType=type; turboValueLength=(type==4||type==5?4:type==6||type==7||type==9?8:type==8?4:type==2||type==3?2:1); turboResultTotal=count;
             long totalBytes=0; for(TurboSegment seg:segments) totalBytes+=seg.length;
             return "TurboScan started. Results: "+count+"\\nRegions: "+segments.size()+" | Selected memory: "+(totalBytes/1048576)+" MiB";
-        },result->{turboResultStart.setText("0");lastTurboResults.clear();renderTurboRows();turboResult.setText(result);});
+        },result->{turboResultStart.setText("0");lastTurboResults.clear();renderTurboRows();turboResult.setText(result);if(aiAssistedMode)turboLoadResults();});
     }
     private int parseTurboAlignment() {
         int a=Integer.parseInt(turboAlignment.getText().toString().trim());
@@ -2266,7 +2377,7 @@ public class MainActivity extends Activity {
             StringBuilder b=new StringBuilder("Results ").append(start).append("–").append(start+rows.size()-1).append(" of ").append(turboResultTotal).append(":\\n");
             for(PS5Client.TurboResult r:rows) b.append(String.format(Locale.US,"0x%016X  current=%s  previous=%s\\n",r.address,toHex(r.current),toHex(r.previous)));
             return b.toString();
-        },result->{turboResult.setText(result);renderTurboRows();});
+        },result->{turboResult.setText(result);renderTurboRows();if(aiAssistedMode){StringBuilder report=new StringBuilder("Actual TurboScan results for ").append(aiGameTitle).append("; desired cheat: ").append(aiGameGoal).append(". Total matches: ").append(turboResultTotal).append(". Current page candidates (address/current/previous):\n");int limit=Math.min(lastTurboResults.size(),40);for(int i=0;i<limit;i++){PS5Client.TurboResult row=lastTurboResults.get(i);report.append(String.format(Locale.US,"0x%016X | %s | %s\n",row.address,toHex(row.current),toHex(row.previous)));}report.append("\nAnalyse only these actual results. Ask the user to perform one controlled game action and report the new visible value or attach a screenshot. Then choose the next scan settings yourself.");sendAiText(report.toString());}});
     }
     private void renderTurboRows() {
         turboRows.removeAllViews();
