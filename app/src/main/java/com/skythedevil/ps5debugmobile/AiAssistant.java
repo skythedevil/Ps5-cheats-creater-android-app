@@ -80,6 +80,10 @@ public final class AiAssistant {
             connection.setRequestMethod("POST");connection.setConnectTimeout(15000);connection.setReadTimeout(60000);
             connection.setDoOutput(true);connection.setRequestProperty("Content-Type","application/json");
             connection.setRequestProperty("Authorization","Bearer "+apiKey(c));
+            if(new URL(endpoint).getHost().equalsIgnoreCase("openrouter.ai")){
+                connection.setRequestProperty("HTTP-Referer","https://github.com/skythedevil/Ps5-cheats-creater-android-app");
+                connection.setRequestProperty("X-Title","PS5 Debug Studio");
+            }
             connection.getOutputStream().write(payload);
             int code=connection.getResponseCode();
             InputStream stream=code>=200&&code<300?connection.getInputStream():connection.getErrorStream();
