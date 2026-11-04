@@ -2920,7 +2920,10 @@ public class MainActivity extends Activity {
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         try {
-            if (requestCode == REQ_IMPORT_ADDRESS_TABLE) {
+            if (requestCode == REQ_AI_SCREENSHOT) {
+                analyzeAiScreenshot(uri);
+                return;
+            } else if (requestCode == REQ_IMPORT_ADDRESS_TABLE) {
                 JSONObject imported = new JSONObject(readUri(uri).trim());
                 if (!"ps5-address-table/1".equals(imported.optString("format")) || imported.optJSONArray("entries") == null)
                     throw new JSONException("Unsupported address table. Expected ps5-address-table/1.");
