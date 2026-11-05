@@ -93,6 +93,12 @@ public class MainActivity extends Activity {
     private boolean turboActive = false;
     private int turboValueType = 4;
     private int turboValueLength = 4;
+    private CheckBox turboAllNumeric;
+    private boolean multiFormatMode=false;
+    private final Map<Integer,Map<Long,PS5Client.TurboResult>> multiFormatBaseline=new LinkedHashMap<>();
+    private List<PS5Client.TurboResult> multiFormatAllResults=new ArrayList<>();
+    private List<Integer> multiFormatAllTypes=new ArrayList<>();
+    private List<Integer> lastTurboResultTypes=new ArrayList<>();
     private EditText gameName, titleId, gameVersion, cheatName, cheatAddress, cheatBytes;
     private TextView connectionStatus, consoleInfo, processInfo, memoryResult, scanResult, cheatStatus, mapResult, debugResult, disasmResult;
     private Button importExactMatchesButton;
@@ -260,7 +266,7 @@ public class MainActivity extends Activity {
         section(page,"3  VALUE SEARCH","Enter the value currently visible in the game. Change it in-game, then run Next Scan.");
         scanAddress=field("Start address (leave 0x0)","0x0");scanLength=field("Scan range (bytes)","1048576");page.addView(scanAddress);page.addView(scanLength);
         turboType=new Spinner(this);String[] types={"Byte (unsigned)","Byte (signed)","2 bytes (unsigned)","2 bytes (signed)","4 bytes (unsigned)","4 bytes (signed)","8 bytes (unsigned)","8 bytes (signed)","Float","Double"};
-        turboType.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,types));turboType.setSelection(4);page.addView(turboType);
+        turboType.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,types));turboType.setSelection(4);page.addView(turboType);turboAllNumeric=new CheckBox(this);turboAllNumeric.setText("ALL NUMERIC FORMATS (10 types)");turboAllNumeric.setTextColor(TEXT);turboAllNumeric.setChecked(false);page.addView(turboAllNumeric);
         turboCompare=new Spinner(this);String[] compares={"Exact value","Fuzzy (±1)","Bigger than","Smaller than","Between low/high","Increased","Increased by","Decreased","Decreased by","Changed","Unchanged","Unknown initial value"};
         turboCompare.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,compares));page.addView(turboCompare);
         turboValue=field("Current game value (e.g. 100)","100");page.addView(turboValue);
@@ -512,6 +518,7 @@ public class MainActivity extends Activity {
         turboType.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, turboTypes));
         turboType.setSelection(4);
         page.addView(turboType);
+        turboAllNumeric=new CheckBox(this);turboAllNumeric.setText("ALL NUMERIC FORMATS (10 types)");turboAllNumeric.setTextColor(TEXT);turboAllNumeric.setChecked(false);page.addView(turboAllNumeric);
         turboStartAddress=field("Memory start address (blank = all)", ""); turboStopAddress=field("Memory stop address (blank = all)", "");
         page.addView(turboStartAddress); page.addView(turboStopAddress);
         turboWritableOnly=new CheckBox(this); turboWritableOnly.setText("Writable regions only"); turboWritableOnly.setTextColor(TEXT); turboWritableOnly.setChecked(true); page.addView(turboWritableOnly);
@@ -2373,7 +2380,51 @@ public class MainActivity extends Activity {
         return encodeTurboValue(type,raw);
     }
     private static final int[] TURBO_COMPARE_CODES={0,1,2,3,4,5,6,7,8,9,10,11};
+
+    private static final int MULTI_FORMAT_RESULT_CAP=10000;
+    private String turboTypeName(int type){String[] n={"1-byte unsigned","1-byte signed","2-byte unsigned","2-byte signed","4-byte unsigned","4-byte signed","8-byte unsigned","8-byte signed","Float","Double"};return type>=0&&type<n.length?n[type]:"Numeric";}
+    private int turboLengthForType(int type){return (type==2||type==3)?2:(type==4||type==5||type==8)?4:(type==6||type==7||type==9)?8:1;}
+    private Map<Long,PS5Client.TurboResult> collectFormatResults(int p,List<TurboSegment> segments,int type,boolean unknown,String raw,int alignment)throws Exception{
+        long count=unknown?scanClient.turboUnknownFirstScan(p,segments,type,alignment):scanClient.turboFirstScan(p,segments,type,0,encodeTurboValue(type,raw),alignment);
+        Map<Long,PS5Client.TurboResult> found=new LinkedHashMap<>();long limit=Math.min(count,MULTI_FORMAT_RESULT_CAP);
+        for(int start=0;start<limit;start+=500){int batch=(int)Math.min(500,limit-start);List<PS5Client.TurboResult> rows=scanClient.turboGet(start,batch,turboLengthForType(type));for(PS5Client.TurboResult row:rows)found.put(row.address,row);}
+        return found;
+    }
+    private void turboFirstScanAllNumeric(){
+        if(!connected){toast("Connect to the PS5 first.");return;}
+        runAsync("Scanning all 10 numeric formats",()->{
+            ensureTurboSession();int p=currentPid();List<TurboSegment> segments=buildTurboSegments(p);if(segments.isEmpty())throw new IllegalArgumentException("No readable memory regions match the selected filters.");
+            int ci=turboCompare.getSelectedItemPosition();if(ci!=0&&ci!=11)throw new IllegalArgumentException("ALL NUMERIC FORMATS supports Exact value or Unknown Initial Value for the first scan.");
+            boolean unknown=ci==11;String raw=turboValue.getText().toString().trim();if(!unknown&&raw.isEmpty())throw new IllegalArgumentException("Enter the current numeric value.");
+            int alignment=parseTurboAlignment();multiFormatBaseline.clear();multiFormatAllResults.clear();multiFormatAllTypes.clear();StringBuilder summary=new StringBuilder("ALL NUMERIC FORMATS first scan\n");
+            for(int type=0;type<10;type++){Map<Long,PS5Client.TurboResult> rows=collectFormatResults(p,segments,type,unknown,raw,alignment);multiFormatBaseline.put(type,rows);for(PS5Client.TurboResult row:rows.values()){multiFormatAllResults.add(row);multiFormatAllTypes.add(type);}summary.append(turboTypeName(type)).append(": ").append(rows.size()).append(rows.size()>=MULTI_FORMAT_RESULT_CAP?" (display cap reached)":"").append("\n");}
+            multiFormatMode=true;turboActive=true;turboResultTotal=multiFormatAllResults.size();lastTurboResults=new ArrayList<>(multiFormatAllResults);lastTurboResultTypes=new ArrayList<>(multiFormatAllTypes);
+            summary.append("Combined candidates loaded: ").append(turboResultTotal).append(". Each numeric type is retained separately.");
+            return summary.toString();
+        },result->{turboResultStart.setText("0");turboResult.setText(result);renderTurboRows();if(aiAssistedMode)shareTurboResultsWithAi();});
+    }
+    private void turboNextScanAllNumeric(){
+        if(!connected||!turboActive||scanClient==null||!multiFormatMode){toast("Run an ALL NUMERIC FORMATS first scan first.");return;}
+        runAsync("Refining all numeric formats",()->{
+            if(turboCompare.getSelectedItemPosition()!=0)throw new IllegalArgumentException("ALL NUMERIC FORMATS refinement uses Exact value. Select Exact value and enter the new in-game number.");
+            String raw=turboValue.getText().toString().trim();if(raw.isEmpty())throw new IllegalArgumentException("Enter the new current numeric value.");
+            int p=currentPid();List<TurboSegment> segments=buildTurboSegments(p);Map<Integer,Map<Long,PS5Client.TurboResult>> refined=new LinkedHashMap<>();List<PS5Client.TurboResult> combined=new ArrayList<>();List<Integer> types=new ArrayList<>();
+            for(int type=0;type<10;type++){Map<Long,PS5Client.TurboResult> now=collectFormatResults(p,segments,type,false,raw,parseTurboAlignment());Map<Long,PS5Client.TurboResult> old=multiFormatBaseline.get(type);Map<Long,PS5Client.TurboResult> keep=new LinkedHashMap<>();if(old!=null)for(Map.Entry<Long,PS5Client.TurboResult> e:now.entrySet())if(old.containsKey(e.getKey()))keep.put(e.getKey(),e.getValue());refined.put(type,keep);for(PS5Client.TurboResult row:keep.values()){combined.add(row);types.add(type);}}
+            multiFormatBaseline.clear();multiFormatBaseline.putAll(refined);multiFormatAllResults=combined;multiFormatAllTypes=types;lastTurboResults=new ArrayList<>(combined);lastTurboResultTypes=new ArrayList<>(types);turboResultTotal=combined.size();
+            return "ALL FORMATS Next Scan complete. Remaining address + type matches: "+combined.size();
+        },result->{turboResultStart.setText("0");turboResult.setText(result);renderTurboRows();if(aiAssistedMode)shareTurboResultsWithAi();});
+    }
+    private void shareTurboResultsWithAi(){
+        if(!aiAssistedMode||lastTurboResults.isEmpty())return;
+        StringBuilder report=new StringBuilder("Actual PS5 scan results for ").append(aiGameTitle).append("; desired cheat: ").append(aiGameGoal).append(". ALL NUMERIC FORMATS candidate count: ").append(turboResultTotal).append(".\n");
+        int limit=Math.min(lastTurboResults.size(),60);for(int i=0;i<limit;i++){PS5Client.TurboResult row=lastTurboResults.get(i);int type=i<lastTurboResultTypes.size()?lastTurboResultTypes.get(i):-1;report.append(type>=0?turboTypeName(type):"Numeric").append(" | 0x").append(String.format(Locale.US,"%016X",row.address)).append(" | ").append(toHex(row.current)).append(" | previous=").append(toHex(row.previous)).append("\n");}
+        report.append("Ask the user to change the game value and report the new exact number. For ALL NUMERIC FORMATS refinement, use Exact value. Never invent addresses or claim a candidate is proven.");
+        sendAiText(report.toString());
+    }
+
     private void turboFirstScan() {
+        if(turboAllNumeric!=null&&turboAllNumeric.isChecked()){turboFirstScanAllNumeric();return;}
+        multiFormatMode=false;multiFormatBaseline.clear();multiFormatAllResults.clear();multiFormatAllTypes.clear();lastTurboResultTypes.clear();
         if(!connected) { toast("Connect to the PS5 first."); return; }
         runAsync("Starting TurboScan",()->{
             ensureTurboSession(); int p=currentPid();
@@ -2432,6 +2483,7 @@ public class MainActivity extends Activity {
         return merged;
     }
     private void turboNextScan() {
+        if(multiFormatMode||(turboAllNumeric!=null&&turboAllNumeric.isChecked())){turboNextScanAllNumeric();return;}
         if(!connected || !turboActive || scanClient==null) { toast("Run Turbo First Scan first."); return; }
         runAsync("Refining TurboScan",()->{
             if(turboType.getSelectedItemPosition()!=turboValueType) throw new IllegalArgumentException("Value type cannot change during a scan.");
@@ -2456,6 +2508,9 @@ public class MainActivity extends Activity {
         } catch(Exception e) { toast(e.getMessage()==null?"Invalid page settings.":e.getMessage()); }
     }
     private void turboLoadResults() {
+        if(multiFormatMode){
+            try{int start=Integer.parseInt(turboResultStart.getText().toString().trim());int count=Integer.parseInt(turboResultCount.getText().toString().trim());if(start<0||count<1||count>500)throw new IllegalArgumentException("Result page must start at 0 or higher and contain 1–500 rows.");if(start>=multiFormatAllResults.size())throw new IllegalArgumentException("Page start is beyond the current result count.");int end=Math.min(multiFormatAllResults.size(),start+count);lastTurboResults=new ArrayList<>(multiFormatAllResults.subList(start,end));lastTurboResultTypes=new ArrayList<>(multiFormatAllTypes.subList(start,end));StringBuilder out=new StringBuilder("ALL FORMATS — results ").append(start).append("–").append(end-1).append(" of ").append(multiFormatAllResults.size()).append("\n");for(int i=0;i<lastTurboResults.size();i++){PS5Client.TurboResult row=lastTurboResults.get(i);out.append(turboTypeName(lastTurboResultTypes.get(i))).append(" | 0x").append(String.format(Locale.US,"%016X",row.address)).append(" | current=").append(toHex(row.current)).append(" | previous=").append(toHex(row.previous)).append("\n");}turboResult.setText(out.toString());renderTurboRows();if(aiAssistedMode)shareTurboResultsWithAi();}catch(Exception e){toast(e.getMessage()==null?"Could not load results.":e.getMessage());}return;
+        }
         if(!turboActive || scanClient==null) { toast("Run Turbo First Scan first."); return; }
         runAsync("Loading TurboScan results",()->{
             int start=Integer.parseInt(turboResultStart.getText().toString().trim());
@@ -2470,10 +2525,11 @@ public class MainActivity extends Activity {
     }
     private void renderTurboRows() {
         turboRows.removeAllViews();
-        for(PS5Client.TurboResult item:lastTurboResults) {
+        for(int resultIndex=0;resultIndex<lastTurboResults.size();resultIndex++) {
+            PS5Client.TurboResult item=lastTurboResults.get(resultIndex);
             LinearLayout row=new LinearLayout(this);row.setOrientation(LinearLayout.VERTICAL);row.setPadding(dp(9),dp(7),dp(9),dp(7));row.setBackgroundColor(PANEL);
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(4);turboRows.addView(row,lp);
-            TextView label=text(String.format(Locale.US,"0x%016X\\nCurrent: %s\\nPrevious: %s",item.address,toHex(item.current),toHex(item.previous)),11,TEXT,false);label.setTypeface(Typeface.MONOSPACE);row.addView(label);
+            int detectedType=multiFormatMode&&resultIndex<lastTurboResultTypes.size()?lastTurboResultTypes.get(resultIndex):-1;TextView label=text((detectedType>=0?turboTypeName(detectedType)+"\\n":"")+String.format(Locale.US,"0x%016X\\nCurrent: %s\\nPrevious: %s",item.address,toHex(item.current),toHex(item.previous)),11,TEXT,false);label.setTypeface(Typeface.MONOSPACE);row.addView(label);
             LinearLayout actions=new LinearLayout(this); actions.setOrientation(LinearLayout.HORIZONTAL);
             Button refresh=button("READ LIVE",PANEL), edit=button("EDIT VALUE (HEX)",PANEL), save=button("SAVE TO TABLE",PANEL);
             actions.addView(refresh,new LinearLayout.LayoutParams(0,dp(48),1));
