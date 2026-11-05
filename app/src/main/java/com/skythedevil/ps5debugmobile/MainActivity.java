@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Bitmap;
@@ -95,9 +98,8 @@ public class MainActivity extends Activity {
     private int turboValueLength = 4;
     private CheckBox turboAllNumeric;
     private boolean multiFormatMode=false;
-    private final Map<Integer,Map<Long,PS5Client.TurboResult>> multiFormatBaseline=new LinkedHashMap<>();
-    private List<PS5Client.TurboResult> multiFormatAllResults=new ArrayList<>();
-    private List<Integer> multiFormatAllTypes=new ArrayList<>();
+    private SQLiteDatabase multiFormatStore;
+    private final long[] multiFormatCounts=new long[10];
     private List<Integer> lastTurboResultTypes=new ArrayList<>();
     private EditText gameName, titleId, gameVersion, cheatName, cheatAddress, cheatBytes;
     private TextView connectionStatus, consoleInfo, processInfo, memoryResult, scanResult, cheatStatus, mapResult, debugResult, disasmResult;
@@ -2384,14 +2386,74 @@ public class MainActivity extends Activity {
     }
     private static final int[] TURBO_COMPARE_CODES={0,1,2,3,4,5,6,7,8,9,10,11};
 
-    private static final int MULTI_FORMAT_RESULT_CAP=500;
     private String turboTypeName(int type){String[] n={"1-byte unsigned","1-byte signed","2-byte unsigned","2-byte signed","4-byte unsigned","4-byte signed","8-byte unsigned","8-byte signed","Float","Double"};return type>=0&&type<n.length?n[type]:"Numeric";}
     private int turboLengthForType(int type){return (type==2||type==3)?2:(type==4||type==5||type==8)?4:(type==6||type==7||type==9)?8:1;}
-    private Map<Long,PS5Client.TurboResult> collectFormatResults(int p,List<TurboSegment> segments,int type,boolean unknown,String raw,int alignment)throws Exception{
-        long count=unknown?scanClient.turboUnknownFirstScan(p,segments,type,alignment):scanClient.turboFirstScan(p,segments,type,0,encodeTurboValue(type,raw),alignment);
-        Map<Long,PS5Client.TurboResult> found=new LinkedHashMap<>();long limit=Math.min(count,MULTI_FORMAT_RESULT_CAP);
-        if(limit>0){List<PS5Client.TurboResult> rows=scanClient.turboGet(0,(int)limit,turboLengthForType(type));for(PS5Client.TurboResult row:rows)found.put(row.address,row);}
-        return found;
+    private SQLiteDatabase multiFormatDb(){
+        if(multiFormatStore==null||!multiFormatStore.isOpen()){
+            multiFormatStore=SQLiteDatabase.openOrCreateDatabase(new File(getCacheDir(),"all_numeric_scan.db"),null);
+            for(int type=0;type<10;type++)multiFormatStore.execSQL("CREATE TABLE IF NOT EXISTS mf_"+type+" (address INTEGER PRIMARY KEY,current BLOB,previous BLOB)");
+        }
+        return multiFormatStore;
+    }
+    private String mfTable(int type){return "mf_"+type;}
+    private long mfCount(int type){
+        Cursor c=multiFormatDb().rawQuery("SELECT COUNT(*) FROM "+mfTable(type),null);
+        try{return c.moveToFirst()?c.getLong(0):0;}finally{c.close();}
+    }
+    private void mfInsert(String table,PS5Client.TurboResult row){
+        ContentValues v=new ContentValues();v.put("address",row.address);v.put("current",row.current);v.put("previous",row.previous);
+        multiFormatDb().insertWithOnConflict(table,null,v,SQLiteDatabase.CONFLICT_REPLACE);
+    }
+    private long scanFormatToStore(int p,List<TurboSegment> segments,int type,boolean unknown,String raw,int alignment)throws Exception{
+        SQLiteDatabase db=multiFormatDb();String table=mfTable(type);db.delete(table,null,null);
+        long total=unknown?scanClient.turboUnknownFirstScan(p,segments,type,alignment):scanClient.turboFirstScan(p,segments,type,0,encodeTurboValue(type,raw),alignment);
+        if(total>Integer.MAX_VALUE)throw new IOException("This format has more than 2.1 billion results; narrow the memory range.");
+        for(long offset=0;offset<total;offset+=10000){
+            int amount=(int)Math.min(10000,total-offset);
+            List<PS5Client.TurboResult> page=scanClient.turboGet((int)offset,amount,turboLengthForType(type));
+            db.beginTransaction();
+            try{for(PS5Client.TurboResult row:page)mfInsert(table,row);db.setTransactionSuccessful();}
+            finally{db.endTransaction();}
+        }
+        return mfCount(type);
+    }
+    private long refineFormatInStore(int p,List<TurboSegment> segments,int type,String raw,int alignment)throws Exception{
+        SQLiteDatabase db=multiFormatDb();String old=mfTable(type),stage="mf_stage_"+type;
+        db.execSQL("CREATE TABLE IF NOT EXISTS "+stage+" (address INTEGER PRIMARY KEY,current BLOB,previous BLOB)");
+        db.delete(stage,null,null);
+        long total=scanClient.turboFirstScan(p,segments,type,0,encodeTurboValue(type,raw),alignment);
+        if(total>Integer.MAX_VALUE)throw new IOException("This format has too many results to refine in one session.");
+        for(long offset=0;offset<total;offset+=10000){
+            int amount=(int)Math.min(10000,total-offset);
+            List<PS5Client.TurboResult> page=scanClient.turboGet((int)offset,amount,turboLengthForType(type));
+            db.beginTransaction();
+            Cursor match=null;
+            try{
+                for(PS5Client.TurboResult row:page){
+                    match=db.rawQuery("SELECT 1 FROM "+old+" WHERE address=?",new String[]{Long.toString(row.address)});
+                    boolean existed=match.moveToFirst();match.close();match=null;
+                    if(existed)mfInsert(stage,row);
+                }
+                db.setTransactionSuccessful();
+            }finally{if(match!=null)match.close();db.endTransaction();}
+        }
+        db.execSQL("DROP TABLE IF EXISTS "+old);
+        db.execSQL("ALTER TABLE "+stage+" RENAME TO "+old);
+        return mfCount(type);
+    }
+    private void loadMultiFormatPage(int start,int count){
+        SQLiteDatabase db=multiFormatDb();lastTurboResults=new ArrayList<>();lastTurboResultTypes=new ArrayList<>();
+        int skip=start,remaining=count;
+        for(int type=0;type<10&&remaining>0;type++){
+            long total=mfCount(type);if(skip>=total){skip-=total;continue;}
+            Cursor c=db.rawQuery("SELECT address,current,previous FROM "+mfTable(type)+" ORDER BY address LIMIT ? OFFSET ?",new String[]{Integer.toString(remaining),Integer.toString(skip)});
+            try{while(c.moveToNext()){PS5Client.TurboResult row=new PS5Client.TurboResult();row.address=c.getLong(0);row.current=c.getBlob(1);row.previous=c.getBlob(2);lastTurboResults.add(row);lastTurboResultTypes.add(type);remaining--;}}finally{c.close();}
+            skip=0;
+        }
+        int end=start+lastTurboResults.size();
+        StringBuilder out=new StringBuilder("ALL FORMATS — results ").append(start).append("–").append(Math.max(start,end-1)).append(" of ").append(turboResultTotal).append("\n");
+        for(int i=0;i<lastTurboResults.size();i++){PS5Client.TurboResult row=lastTurboResults.get(i);out.append(turboTypeName(lastTurboResultTypes.get(i))).append(" | 0x").append(String.format(Locale.US,"%016X",row.address)).append(" | current=").append(toHex(row.current)).append(" | previous=").append(toHex(row.previous)).append("\n");}
+        turboResult.setText(out.toString());renderTurboRows();if(aiAssistedMode)shareTurboResultsWithAi();
     }
     private void turboFirstScanAllNumeric(){
         if(!connected){toast("Connect to the PS5 first.");return;}
@@ -2399,27 +2461,28 @@ public class MainActivity extends Activity {
             ensureTurboSession();int p=currentPid();List<TurboSegment> segments=buildTurboSegments(p);if(segments.isEmpty())throw new IllegalArgumentException("No readable memory regions match the selected filters.");
             int ci=turboCompare.getSelectedItemPosition();if(ci!=0&&ci!=11)throw new IllegalArgumentException("ALL NUMERIC FORMATS supports Exact value or Unknown Initial Value for the first scan.");
             boolean unknown=ci==11;String raw=turboValue.getText().toString().trim();if(!unknown&&raw.isEmpty())throw new IllegalArgumentException("Enter the current numeric value.");
-            int alignment=parseTurboAlignment();multiFormatBaseline.clear();multiFormatAllResults.clear();multiFormatAllTypes.clear();StringBuilder summary=new StringBuilder("ALL NUMERIC FORMATS first scan\n");
-            for(int type=0;type<10;type++){Map<Long,PS5Client.TurboResult> rows=collectFormatResults(p,segments,type,unknown,raw,alignment);multiFormatBaseline.put(type,rows);for(PS5Client.TurboResult row:rows.values()){multiFormatAllResults.add(row);multiFormatAllTypes.add(type);}summary.append(turboTypeName(type)).append(": ").append(rows.size()).append(rows.size()>=MULTI_FORMAT_RESULT_CAP?" (display cap reached)":"").append("\n");}
-            multiFormatMode=true;turboActive=true;turboResultTotal=multiFormatAllResults.size();lastTurboResults=new ArrayList<>(multiFormatAllResults);lastTurboResultTypes=new ArrayList<>(multiFormatAllTypes);
-            summary.append("Combined candidates loaded: ").append(turboResultTotal).append(". Safety limit: up to 500 displayed candidates per format; each format retains its own address baseline.");
+            int alignment=parseTurboAlignment();SQLiteDatabase db=multiFormatDb();for(int type=0;type<10;type++){db.delete(mfTable(type),null,null);db.execSQL("DROP TABLE IF EXISTS mf_stage_"+type);multiFormatCounts[type]=0;}
+            StringBuilder summary=new StringBuilder("ALL NUMERIC FORMATS first scan\n");
+            for(int type=0;type<10;type++){multiFormatCounts[type]=scanFormatToStore(p,segments,type,unknown,raw,alignment);summary.append(turboTypeName(type)).append(": ").append(multiFormatCounts[type]).append("\n");}
+            multiFormatMode=true;turboActive=true;turboResultTotal=0;for(long n:multiFormatCounts)turboResultTotal+=n;
+            summary.append("Total matches saved locally: ").append(turboResultTotal).append(". Results are loaded in pages; no 500-match-per-format cap.");
             return summary.toString();
-        },result->{turboResultStart.setText("0");turboResult.setText(result);renderTurboRows();if(aiAssistedMode)shareTurboResultsWithAi();});
+        },result->{turboResultStart.setText("0");turboResult.setText(result);loadMultiFormatPage(0,Integer.parseInt(turboResultCount.getText().toString()));});
     }
     private void turboNextScanAllNumeric(){
         if(!connected||!turboActive||scanClient==null||!multiFormatMode){toast("Run an ALL NUMERIC FORMATS first scan first.");return;}
         runAsync("Refining all numeric formats",()->{
             if(turboCompare.getSelectedItemPosition()!=0)throw new IllegalArgumentException("ALL NUMERIC FORMATS refinement uses Exact value. Select Exact value and enter the new in-game number.");
             String raw=turboValue.getText().toString().trim();if(raw.isEmpty())throw new IllegalArgumentException("Enter the new current numeric value.");
-            int p=currentPid();List<TurboSegment> segments=buildTurboSegments(p);Map<Integer,Map<Long,PS5Client.TurboResult>> refined=new LinkedHashMap<>();List<PS5Client.TurboResult> combined=new ArrayList<>();List<Integer> types=new ArrayList<>();
-            for(int type=0;type<10;type++){Map<Long,PS5Client.TurboResult> now=collectFormatResults(p,segments,type,false,raw,parseTurboAlignment());Map<Long,PS5Client.TurboResult> old=multiFormatBaseline.get(type);Map<Long,PS5Client.TurboResult> keep=new LinkedHashMap<>();if(old!=null)for(Map.Entry<Long,PS5Client.TurboResult> e:now.entrySet())if(old.containsKey(e.getKey()))keep.put(e.getKey(),e.getValue());refined.put(type,keep);for(PS5Client.TurboResult row:keep.values()){combined.add(row);types.add(type);}}
-            multiFormatBaseline.clear();multiFormatBaseline.putAll(refined);multiFormatAllResults=combined;multiFormatAllTypes=types;lastTurboResults=new ArrayList<>(combined);lastTurboResultTypes=new ArrayList<>(types);turboResultTotal=combined.size();
-            return "ALL FORMATS Next Scan complete. Remaining address + type matches: "+combined.size();
-        },result->{turboResultStart.setText("0");turboResult.setText(result);renderTurboRows();if(aiAssistedMode)shareTurboResultsWithAi();});
+            int p=currentPid();List<TurboSegment> segments=buildTurboSegments(p);long total=0;
+            for(int type=0;type<10;type++){multiFormatCounts[type]=refineFormatInStore(p,segments,type,raw,parseTurboAlignment());total+=multiFormatCounts[type];}
+            turboResultTotal=total;
+            return "ALL FORMATS Next Scan complete. Remaining address + type matches: "+total;
+        },result->{turboResultStart.setText("0");turboResult.setText(result);loadMultiFormatPage(0,Integer.parseInt(turboResultCount.getText().toString()));});
     }
     private void turboFirstScan() {
         if(turboAllNumeric!=null&&turboAllNumeric.isChecked()){turboFirstScanAllNumeric();return;}
-        multiFormatMode=false;multiFormatBaseline.clear();multiFormatAllResults.clear();multiFormatAllTypes.clear();lastTurboResultTypes.clear();
+        multiFormatMode=false;lastTurboResultTypes.clear();
         if(!connected) { toast("Connect to the PS5 first."); return; }
         runAsync("Starting TurboScan",()->{
             ensureTurboSession(); int p=currentPid();
@@ -2504,7 +2567,7 @@ public class MainActivity extends Activity {
     }
     private void turboLoadResults() {
         if(multiFormatMode){
-            try{int start=Integer.parseInt(turboResultStart.getText().toString().trim());int count=Integer.parseInt(turboResultCount.getText().toString().trim());if(start<0||count<1||count>500)throw new IllegalArgumentException("Result page must start at 0 or higher and contain 1–500 rows.");if(start>=multiFormatAllResults.size())throw new IllegalArgumentException("Page start is beyond the current result count.");int end=Math.min(multiFormatAllResults.size(),start+count);lastTurboResults=new ArrayList<>(multiFormatAllResults.subList(start,end));lastTurboResultTypes=new ArrayList<>(multiFormatAllTypes.subList(start,end));StringBuilder out=new StringBuilder("ALL FORMATS — results ").append(start).append("–").append(end-1).append(" of ").append(multiFormatAllResults.size()).append("\n");for(int i=0;i<lastTurboResults.size();i++){PS5Client.TurboResult row=lastTurboResults.get(i);out.append(turboTypeName(lastTurboResultTypes.get(i))).append(" | 0x").append(String.format(Locale.US,"%016X",row.address)).append(" | current=").append(toHex(row.current)).append(" | previous=").append(toHex(row.previous)).append("\n");}turboResult.setText(out.toString());renderTurboRows();if(aiAssistedMode)shareTurboResultsWithAi();}catch(Exception e){toast(e.getMessage()==null?"Could not load results.":e.getMessage());}return;
+            try{int start=Integer.parseInt(turboResultStart.getText().toString().trim());int count=Integer.parseInt(turboResultCount.getText().toString().trim());if(start<0||count<1||count>500)throw new IllegalArgumentException("Result page must start at 0 or higher and contain 1–500 rows.");if(start>=turboResultTotal)throw new IllegalArgumentException("Page start is beyond the current result count.");loadMultiFormatPage(start,count);}catch(Exception e){toast(e.getMessage()==null?"Could not load results.":e.getMessage());}return;
         }
         if(!turboActive || scanClient==null) { toast("Run Turbo First Scan first."); return; }
         runAsync("Loading TurboScan results",()->{
