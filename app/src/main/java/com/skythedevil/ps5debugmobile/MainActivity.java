@@ -2525,7 +2525,8 @@ public class MainActivity extends Activity {
     }
     private void renderTurboRows() {
         turboRows.removeAllViews();
-        for(int resultIndex=0;resultIndex<lastTurboResults.size();resultIndex++) {\n            PS5Client.TurboResult item=lastTurboResults.get(resultIndex);
+        for(int resultIndex=0;resultIndex<lastTurboResults.size();resultIndex++) {
+            PS5Client.TurboResult item=lastTurboResults.get(resultIndex);
             LinearLayout row=new LinearLayout(this);row.setOrientation(LinearLayout.VERTICAL);row.setPadding(dp(9),dp(7),dp(9),dp(7));row.setBackgroundColor(PANEL);
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(4);turboRows.addView(row,lp);
             int detectedType=multiFormatMode&&resultIndex<lastTurboResultTypes.size()?lastTurboResultTypes.get(resultIndex):-1;TextView label=text((detectedType>=0?turboTypeName(detectedType)+"\\n":"")+String.format(Locale.US,"0x%016X\\nCurrent: %s\\nPrevious: %s",item.address,toHex(item.current),toHex(item.previous)),11,TEXT,false);label.setTypeface(Typeface.MONOSPACE);row.addView(label);
