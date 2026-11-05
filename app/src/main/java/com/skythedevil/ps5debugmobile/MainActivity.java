@@ -93,6 +93,12 @@ public class MainActivity extends Activity {
     private boolean turboActive = false;
     private int turboValueType = 4;
     private int turboValueLength = 4;
+    private CheckBox turboAllNumeric;
+    private boolean multiFormatMode=false;
+    private final Map<Integer,Map<Long,PS5Client.TurboResult>> multiFormatBaseline=new LinkedHashMap<>();
+    private List<PS5Client.TurboResult> multiFormatAllResults=new ArrayList<>();
+    private List<Integer> multiFormatAllTypes=new ArrayList<>();
+    private List<Integer> lastTurboResultTypes=new ArrayList<>();
     private EditText gameName, titleId, gameVersion, cheatName, cheatAddress, cheatBytes;
     private TextView connectionStatus, consoleInfo, processInfo, memoryResult, scanResult, cheatStatus, mapResult, debugResult, disasmResult;
     private Button importExactMatchesButton;
@@ -260,7 +266,7 @@ public class MainActivity extends Activity {
         section(page,"3  VALUE SEARCH","Enter the value currently visible in the game. Change it in-game, then run Next Scan.");
         scanAddress=field("Start address (leave 0x0)","0x0");scanLength=field("Scan range (bytes)","1048576");page.addView(scanAddress);page.addView(scanLength);
         turboType=new Spinner(this);String[] types={"Byte (unsigned)","Byte (signed)","2 bytes (unsigned)","2 bytes (signed)","4 bytes (unsigned)","4 bytes (signed)","8 bytes (unsigned)","8 bytes (signed)","Float","Double"};
-        turboType.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,types));turboType.setSelection(4);page.addView(turboType);
+        turboType.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,types));turboType.setSelection(4);page.addView(turboType);turboAllNumeric=new CheckBox(this);turboAllNumeric.setText("ALL NUMERIC FORMATS (10 types)");turboAllNumeric.setTextColor(TEXT);turboAllNumeric.setChecked(false);page.addView(turboAllNumeric);
         turboCompare=new Spinner(this);String[] compares={"Exact value","Fuzzy (±1)","Bigger than","Smaller than","Between low/high","Increased","Increased by","Decreased","Decreased by","Changed","Unchanged","Unknown initial value"};
         turboCompare.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,compares));page.addView(turboCompare);
         turboValue=field("Current game value (e.g. 100)","100");page.addView(turboValue);
