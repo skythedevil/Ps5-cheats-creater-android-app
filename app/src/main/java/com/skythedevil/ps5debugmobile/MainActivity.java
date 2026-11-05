@@ -518,6 +518,7 @@ public class MainActivity extends Activity {
         turboType.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, turboTypes));
         turboType.setSelection(4);
         page.addView(turboType);
+        turboAllNumeric=new CheckBox(this);turboAllNumeric.setText("ALL NUMERIC FORMATS (10 types)");turboAllNumeric.setTextColor(TEXT);turboAllNumeric.setChecked(false);page.addView(turboAllNumeric);
         turboStartAddress=field("Memory start address (blank = all)", ""); turboStopAddress=field("Memory stop address (blank = all)", "");
         page.addView(turboStartAddress); page.addView(turboStopAddress);
         turboWritableOnly=new CheckBox(this); turboWritableOnly.setText("Writable regions only"); turboWritableOnly.setTextColor(TEXT); turboWritableOnly.setChecked(true); page.addView(turboWritableOnly);
