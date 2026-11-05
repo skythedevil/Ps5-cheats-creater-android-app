@@ -2384,13 +2384,13 @@ public class MainActivity extends Activity {
     }
     private static final int[] TURBO_COMPARE_CODES={0,1,2,3,4,5,6,7,8,9,10,11};
 
-    private static final int MULTI_FORMAT_RESULT_CAP=10000;
+    private static final int MULTI_FORMAT_RESULT_CAP=500;
     private String turboTypeName(int type){String[] n={"1-byte unsigned","1-byte signed","2-byte unsigned","2-byte signed","4-byte unsigned","4-byte signed","8-byte unsigned","8-byte signed","Float","Double"};return type>=0&&type<n.length?n[type]:"Numeric";}
     private int turboLengthForType(int type){return (type==2||type==3)?2:(type==4||type==5||type==8)?4:(type==6||type==7||type==9)?8:1;}
     private Map<Long,PS5Client.TurboResult> collectFormatResults(int p,List<TurboSegment> segments,int type,boolean unknown,String raw,int alignment)throws Exception{
         long count=unknown?scanClient.turboUnknownFirstScan(p,segments,type,alignment):scanClient.turboFirstScan(p,segments,type,0,encodeTurboValue(type,raw),alignment);
         Map<Long,PS5Client.TurboResult> found=new LinkedHashMap<>();long limit=Math.min(count,MULTI_FORMAT_RESULT_CAP);
-        for(int start=0;start<limit;start+=500){int batch=(int)Math.min(500,limit-start);List<PS5Client.TurboResult> rows=scanClient.turboGet(start,batch,turboLengthForType(type));for(PS5Client.TurboResult row:rows)found.put(row.address,row);}
+        if(limit>0){List<PS5Client.TurboResult> rows=scanClient.turboGet(0,(int)limit,turboLengthForType(type));for(PS5Client.TurboResult row:rows)found.put(row.address,row);}
         return found;
     }
     private void turboFirstScanAllNumeric(){
@@ -2402,7 +2402,7 @@ public class MainActivity extends Activity {
             int alignment=parseTurboAlignment();multiFormatBaseline.clear();multiFormatAllResults.clear();multiFormatAllTypes.clear();StringBuilder summary=new StringBuilder("ALL NUMERIC FORMATS first scan\n");
             for(int type=0;type<10;type++){Map<Long,PS5Client.TurboResult> rows=collectFormatResults(p,segments,type,unknown,raw,alignment);multiFormatBaseline.put(type,rows);for(PS5Client.TurboResult row:rows.values()){multiFormatAllResults.add(row);multiFormatAllTypes.add(type);}summary.append(turboTypeName(type)).append(": ").append(rows.size()).append(rows.size()>=MULTI_FORMAT_RESULT_CAP?" (display cap reached)":"").append("\n");}
             multiFormatMode=true;turboActive=true;turboResultTotal=multiFormatAllResults.size();lastTurboResults=new ArrayList<>(multiFormatAllResults);lastTurboResultTypes=new ArrayList<>(multiFormatAllTypes);
-            summary.append("Combined candidates loaded: ").append(turboResultTotal).append(". Each numeric type is retained separately.");
+            summary.append("Combined candidates loaded: ").append(turboResultTotal).append(". Safety limit: up to 500 displayed candidates per format; each format retains its own address baseline.");
             return summary.toString();
         },result->{turboResultStart.setText("0");turboResult.setText(result);renderTurboRows();if(aiAssistedMode)shareTurboResultsWithAi();});
     }
