@@ -1219,15 +1219,18 @@ public class MainActivity extends Activity {
         if(!AiAssistant.isConfigured(this)){toast("Configure AI first.");return;}
         if(lastTurboResults.isEmpty()){toast("Load a TurboScan results page first.");return;}
         StringBuilder prompt=new StringBuilder("Analyse these real TurboScan results and tell me the safest next experiment. Do not assume any candidate is verified. Total matches: ")
-            .append(turboResultTotal).append(". Type: ").append(turboType.getSelectedItem())
+            .append(turboResultTotal).append(". Search mode: ").append(multiFormatMode?"ALL NUMERIC FORMATS":"single numeric type")
+            .append(". Selected type: ").append(turboType.getSelectedItem())
             .append(". Current comparison: ").append(turboCompare.getSelectedItem())
-            .append(". Search value: ").append(turboValue.getText().toString()).append(".\nLoaded candidates (address, current bytes, previous bytes):\n");
+            .append(". Search value: ").append(turboValue.getText().toString()).append(".\nLoaded candidates (type, address, current bytes, previous bytes):\n");
         int limit=Math.min(lastTurboResults.size(),40);
         for(int i=0;i<limit;i++){
             PS5Client.TurboResult r=lastTurboResults.get(i);
-            prompt.append(String.format(Locale.US,"0x%016X | %s | %s\n",r.address,toHex(r.current),toHex(r.previous)));
+            String type=multiFormatMode&&i<lastTurboResultTypes.size()?turboTypeName(lastTurboResultTypes.get(i)):String.valueOf(turboType.getSelectedItem());
+            prompt.append(type).append(" | ").append(String.format(Locale.US,"0x%016X",r.address)).append(" | ").append(toHex(r.current)).append(" | ").append(toHex(r.previous)).append("\n");
         }
         if(lastTurboResults.size()>limit)prompt.append("… ").append(lastTurboResults.size()-limit).append(" more results omitted from this message.");
+        if(multiFormatMode)prompt.append("\nFor ALL NUMERIC FORMATS, guide the user to refine using Exact value and their new visible numeric value. Never invent addresses or claim a candidate is verified.");
         aiPromptInput.setText(prompt.toString());
         sendAiMessage();
     }
@@ -2414,14 +2417,6 @@ public class MainActivity extends Activity {
             return "ALL FORMATS Next Scan complete. Remaining address + type matches: "+combined.size();
         },result->{turboResultStart.setText("0");turboResult.setText(result);renderTurboRows();if(aiAssistedMode)shareTurboResultsWithAi();});
     }
-    private void shareTurboResultsWithAi(){
-        if(!aiAssistedMode||lastTurboResults.isEmpty())return;
-        StringBuilder report=new StringBuilder("Actual PS5 scan results for ").append(aiGameTitle).append("; desired cheat: ").append(aiGameGoal).append(". ALL NUMERIC FORMATS candidate count: ").append(turboResultTotal).append(".\n");
-        int limit=Math.min(lastTurboResults.size(),60);for(int i=0;i<limit;i++){PS5Client.TurboResult row=lastTurboResults.get(i);int type=i<lastTurboResultTypes.size()?lastTurboResultTypes.get(i):-1;report.append(type>=0?turboTypeName(type):"Numeric").append(" | 0x").append(String.format(Locale.US,"%016X",row.address)).append(" | ").append(toHex(row.current)).append(" | previous=").append(toHex(row.previous)).append("\n");}
-        report.append("Ask the user to change the game value and report the new exact number. For ALL NUMERIC FORMATS refinement, use Exact value. Never invent addresses or claim a candidate is proven.");
-        sendAiText(report.toString());
-    }
-
     private void turboFirstScan() {
         if(turboAllNumeric!=null&&turboAllNumeric.isChecked()){turboFirstScanAllNumeric();return;}
         multiFormatMode=false;multiFormatBaseline.clear();multiFormatAllResults.clear();multiFormatAllTypes.clear();lastTurboResultTypes.clear();
